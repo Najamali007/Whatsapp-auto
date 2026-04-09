@@ -133,30 +133,18 @@ app.post('/api/auth/super-admin/login', async (req, res) => {
   res.json({ token, role: user.role });
 });
 
-app.post('/api/auth/reset-password', async (req, res) => {
-  const { username, pin, newPassword } = req.body;
-  const SECURITY_PIN = '0331244';
-
-  if (pin !== SECURITY_PIN) {
-    return res.status(403).json({ error: 'Invalid security pin' });
+// --- Settings Routes ---
+app.get('/api/settings/check', authenticateToken, async (req: any, res) => {
+  try {
+    const superAdmin = await db.prepare("SELECT id FROM users WHERE role = 'super_admin' LIMIT 1").get() as any;
+    if (!superAdmin) return res.json({ hasApiKeys: false });
+    const settings = await db.prepare("SELECT COUNT(*) as count FROM settings WHERE user_id = ? AND is_active = 1 AND status = 'active'").get(superAdmin.id) as any;
+    res.json({ hasApiKeys: settings.count > 0 });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to check settings' });
   }
-
-  const user = await db.prepare('SELECT id, role FROM users WHERE username = ?').get(username) as any;
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  if (user.role !== 'super_admin') {
-    return res.status(403).json({ error: 'Password reset is only available for Super Admin' });
-  }
-
-  const hashedPassword = bcrypt.hashSync(newPassword, 10);
-  await db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashedPassword, user.id);
-  
-  res.json({ success: true, message: 'Password reset successfully' });
 });
 
-// --- Settings Routes ---
 app.get('/api/settings/autopilot', authenticateToken, async (req: any, res) => {
   try {
     const user = await db.prepare('SELECT is_global_autopilot FROM users WHERE id = ?').get(req.user.id) as any;
@@ -197,9 +185,27 @@ const validateApiKey = async (provider: string, apiKey: string) => {
 };
 
 // --- Super Admin Routes ---
+app.get('/api/super-admin/stats', authenticateSuperAdmin, async (req, res) => {
+  try {
+    const totalAdmins = await db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get() as any;
+    const activeAdmins = await db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND is_active = 1").get() as any;
+    const totalLeads = await db.prepare("SELECT COUNT(*) as count FROM leads").get() as any;
+    const totalTokensUsed = await db.prepare("SELECT SUM(tokens) as total FROM users WHERE role = 'admin'").get() as any;
+    
+    res.json({
+      totalAdmins: totalAdmins.count,
+      activeAdmins: activeAdmins.count,
+      totalLeads: totalLeads.count,
+      totalTokensUsed: totalTokensUsed.total || 0
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
 app.get('/api/super-admin/admins', authenticateSuperAdmin, async (req, res) => {
   try {
-    const admins = await db.prepare("SELECT id, username, role, is_active, created_at FROM users WHERE role = 'admin'").all();
+    const admins = await db.prepare("SELECT id, username, role, is_active, tokens, token_limit, created_at FROM users WHERE role = 'admin'").all();
     res.json(admins);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch admins' });
@@ -207,14 +213,14 @@ app.get('/api/super-admin/admins', authenticateSuperAdmin, async (req, res) => {
 });
 
 app.post('/api/super-admin/admins', authenticateSuperAdmin, async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, tokens, token_limit } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
 
   try {
     const hashedPassword = bcrypt.hashSync(password, 10);
-    const result = await db.prepare('INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, ?)')
-      .run(username, hashedPassword, 'admin', 1);
-    res.json({ id: result.lastInsertRowid, username, role: 'admin', is_active: 1 });
+    const result = await db.prepare('INSERT INTO users (username, password, role, is_active, tokens, token_limit) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(username, hashedPassword, 'admin', 1, tokens || 0, token_limit || 0);
+    res.json({ id: result.lastInsertRowid, username, role: 'admin', is_active: 1, tokens: tokens || 0, token_limit: token_limit || 0 });
   } catch (error: any) {
     if (error.message.includes('UNIQUE')) {
       return res.status(400).json({ error: 'Username already exists' });
@@ -224,7 +230,7 @@ app.post('/api/super-admin/admins', authenticateSuperAdmin, async (req, res) => 
 });
 
 app.put('/api/super-admin/admins/:id', authenticateSuperAdmin, async (req, res) => {
-  const { is_active, password } = req.body;
+  const { is_active, password, tokens, token_limit } = req.body;
   try {
     if (password) {
       const hashedPassword = bcrypt.hashSync(password, 10);
@@ -233,9 +239,30 @@ app.put('/api/super-admin/admins/:id', authenticateSuperAdmin, async (req, res) 
     if (is_active !== undefined) {
       await db.prepare('UPDATE users SET is_active = ? WHERE id = ? AND role = ?').run(is_active ? 1 : 0, req.params.id, 'admin');
     }
+    if (tokens !== undefined) {
+      await db.prepare('UPDATE users SET tokens = ? WHERE id = ? AND role = ?').run(tokens, req.params.id, 'admin');
+    }
+    if (token_limit !== undefined) {
+      await db.prepare('UPDATE users SET token_limit = ? WHERE id = ? AND role = ?').run(token_limit, req.params.id, 'admin');
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to update admin' });
+  }
+});
+
+app.get('/api/super-admin/audit-logs', authenticateSuperAdmin, async (req, res) => {
+  try {
+    const logs = await db.prepare(`
+      SELECT al.*, u.username 
+      FROM audit_logs al 
+      JOIN users u ON al.user_id = u.id 
+      ORDER BY al.created_at DESC 
+      LIMIT 100
+    `).all();
+    res.json(logs);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch audit logs' });
   }
 });
 
@@ -1057,7 +1084,8 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: any, res) => {
       currentConversions, lastConversions,
       messages,
       campaigns,
-      customers
+      customers,
+      user
     ] = await Promise.all([
       db.prepare('SELECT COUNT(*) as count FROM leads WHERE user_id = ?').get(userId),
       db.prepare('SELECT COUNT(*) as count FROM leads WHERE user_id = ? AND created_at < ?').get(userId, firstDayCurrentMonth),
@@ -1068,6 +1096,7 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: any, res) => {
       db.prepare('SELECT SUM(unread_count) as count FROM conversations c JOIN whatsapp_sessions s ON c.session_id = s.id WHERE s.user_id = ?').get(userId),
       db.prepare("SELECT COUNT(*) as count FROM bulk_campaigns WHERE user_id = ? AND status = 'processing'").get(userId),
       db.prepare("SELECT COUNT(*) as count FROM leads WHERE user_id = ? AND status = 'Final Customer'").get(userId),
+      db.prepare('SELECT tokens, token_limit, username, created_at FROM users WHERE id = ?').get(userId)
     ]);
 
     const calculateGrowth = (current: number, totalBefore: number) => {
@@ -1085,6 +1114,10 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: any, res) => {
       inboxMessages: messages.count || 0,
       activeCampaigns: campaigns.count || 0,
       totalCustomers: customers.count || 0,
+      tokens: user.tokens || 0,
+      tokenLimit: user.token_limit || 0,
+      username: user.username,
+      memberSince: user.created_at,
       growth: {
         leads: calculateGrowth(currentLeads.count, lastLeads.count),
         qualified: calculateGrowth(currentQualified.count, lastQualified.count),

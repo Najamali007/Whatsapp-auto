@@ -52,17 +52,20 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
 
   const userRole = localStorage.getItem('user_role') || 'admin';
 
-  const menuItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'conversations', label: 'Inbox', icon: MessageSquare, badge: unreadMessagesCount },
-    { id: 'leads', label: 'Leads', icon: UserPlus, badge: newLeadsCount },
-    { id: 'campaigns', label: 'Campaigns', icon: Send },
-    { id: 'agents', label: 'Agents', icon: Users },
-    { id: 'reports', label: 'Reports', icon: BarChart3 },
-    { id: 'whatsapp', label: 'Channels', icon: Layers },
-    ...(userRole === 'super_admin' ? [{ id: 'settings', label: 'API Settings', icon: Settings }] : []),
-    ...(userRole === 'super_admin' ? [{ id: 'admins', label: 'Manage Admins', icon: UserCircle }] : []),
-  ];
+  const menuItems = userRole === 'super_admin' 
+    ? [
+        { id: 'settings', label: 'API Settings', icon: Settings },
+        { id: 'admins', label: 'Manage Admins', icon: UserCircle },
+      ]
+    : [
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'conversations', label: 'Inbox', icon: MessageSquare, badge: unreadMessagesCount },
+        { id: 'leads', label: 'Leads', icon: UserPlus, badge: newLeadsCount },
+        { id: 'campaigns', label: 'Campaigns', icon: Send },
+        { id: 'agents', label: 'Agents', icon: Users },
+        { id: 'reports', label: 'Reports', icon: BarChart3 },
+        { id: 'whatsapp', label: 'Channels', icon: Layers },
+      ];
 
   return (
     <div className="min-h-screen bg-[#F8F9FB] flex relative overflow-hidden">
@@ -92,16 +95,18 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
           </div>
         </div>
 
-        <div className="px-6 mb-8">
-          <button
-            onClick={() => setActiveTab('agents')}
-            className="group relative w-full bg-gray-900 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-2xl shadow-gray-900/20 transition-all active:scale-[0.98] overflow-hidden"
-          >
-            <div className="absolute inset-0 bg-primary translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500" />
-            <Plus className="w-4 h-4 relative z-10" />
-            <span className="relative z-10">Create Agent</span>
-          </button>
-        </div>
+        {userRole !== 'super_admin' && (
+          <div className="px-6 mb-8">
+            <button
+              onClick={() => setActiveTab('agents')}
+              className="group relative w-full bg-gray-900 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-2xl shadow-gray-900/20 transition-all active:scale-[0.98] overflow-hidden"
+            >
+              <div className="absolute inset-0 bg-primary translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500" />
+              <Plus className="w-4 h-4 relative z-10" />
+              <span className="relative z-10">Create Agent</span>
+            </button>
+          </div>
+        )}
 
         <nav className="flex-1 px-4 space-y-2 overflow-y-auto custom-scrollbar">
           {menuItems.map((item) => (

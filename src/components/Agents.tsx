@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Plus, Trash2, Edit2, Check, X, Loader2, BrainCircuit, Upload, History, FileText, AlertCircle, Layers, User, Zap, Sparkles, Target, RefreshCw, MessageSquare } from 'lucide-react';
+import { Users, Plus, Trash2, Edit2, Check, X, Loader2, BrainCircuit, Upload, History, FileText, AlertCircle, Layers, User, Zap, Sparkles, Target, RefreshCw, MessageSquare, LayoutDashboard } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch } from '../lib/api';
 import { loadingManager } from '../lib/loading';
@@ -31,9 +31,10 @@ interface TrainingFile {
 interface AgentsProps {
   token: string;
   initialAgentId?: number | null;
+  onNavigate?: (tab: string) => void;
 }
 
-export default function Agents({ token, initialAgentId }: AgentsProps) {
+export default function Agents({ token, initialAgentId, onNavigate }: AgentsProps) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -73,12 +74,12 @@ export default function Agents({ token, initialAgentId }: AgentsProps) {
 
   const fetchAgents = async () => {
     try {
-      const [agentsData, settingsData] = await Promise.all([
+      const [agentsData, settingsCheck] = await Promise.all([
         apiFetch('/api/agents'),
-        apiFetch('/api/settings')
+        apiFetch('/api/settings/check')
       ]);
       setAgents(agentsData);
-      setHasApiKeys(settingsData.length > 0);
+      setHasApiKeys(settingsCheck.hasApiKeys);
       setError(null);
     } catch (error: any) {
       console.error('Failed to fetch agents:', error);
@@ -343,6 +344,15 @@ export default function Agents({ token, initialAgentId }: AgentsProps) {
     <div className="h-full flex flex-col relative overflow-hidden">
       {/* Top Navigation */}
       <div className="flex items-center px-8 border-b border-gray-100 bg-white/80 backdrop-blur-md sticky top-0 z-20">
+        <div className="flex items-center gap-2 mr-6 pr-6 border-r border-gray-100">
+          <button
+            onClick={() => onNavigate?.('dashboard')}
+            className="p-2 text-gray-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all"
+            title="Back to Dashboard"
+          >
+            <LayoutDashboard className="w-5 h-5" />
+          </button>
+        </div>
         <button
           onClick={() => setActiveSubTab('agents')}
           className={`px-6 py-4 text-sm font-black uppercase tracking-widest transition-all border-b-2 ${

@@ -668,6 +668,23 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     const session = await db.prepare('SELECT user_id, agent_id FROM whatsapp_sessions WHERE id = ?').get(sessionId) as any;
     if (!session || !session.user_id) return;
 
+    // Token Check
+    const user = await db.prepare('SELECT role, tokens, token_limit FROM users WHERE id = ?').get(session.user_id) as any;
+    if (user && user.role === 'admin') {
+      if (user.tokens >= user.token_limit) {
+        console.log(`Admin ${session.user_id} has reached token limit (${user.tokens}/${user.token_limit}). Stopping agent.`);
+        await db.prepare('UPDATE conversations SET is_autopilot = 0 WHERE id = ?').run(conversation.id);
+        io.emit('new_message', {
+          conversation_id: conversation.id,
+          sender: 'system',
+          content: 'Agent stopped: Token limit reached.',
+          type: 'system',
+          created_at: new Date().toISOString()
+        });
+        return;
+      }
+    }
+
     const agent = await db.prepare('SELECT * FROM agents WHERE id = ?').get(session.agent_id) as any;
     if (!agent) return;
 
@@ -871,6 +888,13 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
 
     // Send message via WhatsApp
     await sock.sendMessage(conversation.contact_number, { text: aiResponse });
+
+    // Consume token for admin
+    if (user && user.role === 'admin') {
+      await db.prepare('UPDATE users SET tokens = tokens + 1 WHERE id = ?').run(session.user_id);
+      await db.prepare('INSERT INTO audit_logs (user_id, action, details) VALUES (?, ?, ?)')
+        .run(session.user_id, 'token_consumed', `Token consumed for message in conversation ${conversation.id}. New total: ${user.tokens + 1}`);
+    }
 
     // Update Timestamps
     const timestamp = new Date().toISOString();

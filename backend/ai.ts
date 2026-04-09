@@ -9,8 +9,11 @@ export interface AIProvider {
   baseUrl?: string;
 }
 
-export async function getActiveApiKeys(userId: number) {
-  return await db.prepare("SELECT * FROM settings WHERE user_id = ? AND is_active = 1 AND status = 'active' ORDER BY id ASC").all(userId) as any[];
+export async function getActiveApiKeys(_userId: number) {
+  // Always fetch global API keys from super admin settings
+  const superAdmin = await db.prepare("SELECT id FROM users WHERE role = 'super_admin' LIMIT 1").get() as any;
+  if (!superAdmin) return [];
+  return await db.prepare("SELECT * FROM settings WHERE user_id = ? AND is_active = 1 AND status = 'active' ORDER BY id ASC").all(superAdmin.id) as any[];
 }
 
 const DEFAULT_KEYS = {

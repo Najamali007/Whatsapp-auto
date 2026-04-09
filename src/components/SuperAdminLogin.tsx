@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, Lock, User, Loader2, Key } from 'lucide-react';
+import { Shield, Lock, User, Loader2, Key, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface SuperAdminLoginProps {
@@ -7,15 +7,14 @@ interface SuperAdminLoginProps {
 }
 
 export default function SuperAdminLogin({ onLogin }: SuperAdminLoginProps) {
-  const [mode, setMode] = useState<'login' | 'forgot'>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [securityKey, setSecurityKey] = useState('');
-  const [pin, setPin] = useState('');
-  const [newPassword, setNewPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showSecurityKey, setShowSecurityKey] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,50 +22,25 @@ export default function SuperAdminLogin({ onLogin }: SuperAdminLoginProps) {
     setError('');
     setSuccess('');
 
-    if (mode === 'login') {
-      try {
-        const response = await fetch('/api/auth/super-admin/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password, securityKey }),
-        });
+    try {
+      const response = await fetch('/api/auth/super-admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, securityKey }),
+      });
 
-        const data = await response.json();
+      const data = await response.json();
 
-        if (response.ok) {
-          localStorage.setItem('user_role', data.role);
-          onLogin(data.token);
-        } else {
-          setError(data.error || 'Authentication failed');
-        }
-      } catch (err) {
-        setError('Connection error');
-      } finally {
-        setIsLoading(false);
+      if (response.ok) {
+        localStorage.setItem('user_role', data.role);
+        onLogin(data.token);
+      } else {
+        setError(data.error || 'Authentication failed');
       }
-    } else {
-      try {
-        const response = await fetch('/api/auth/reset-password', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, pin, newPassword }),
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-          setSuccess('Password reset successfully. You can now sign in.');
-          setMode('login');
-          setPin('');
-          setNewPassword('');
-        } else {
-          setError(data.error || 'Reset failed');
-        }
-      } catch (err) {
-        setError('Connection error');
-      } finally {
-        setIsLoading(false);
-      }
+    } catch (err) {
+      setError('Connection error');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -92,79 +66,63 @@ export default function SuperAdminLogin({ onLogin }: SuperAdminLoginProps) {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1">
             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-              <User className="w-3 h-3" /> Username
+              <User className="w-3 h-3" /> Username / Admin
             </label>
             <input
               type="text"
               className="w-full bg-gray-700 border border-gray-600 rounded-xl p-3 text-sm text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
-              placeholder="najam786ali@yahoo.com"
+              placeholder="example@gmail.com"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               required
             />
           </div>
 
-          {mode === 'login' ? (
-            <>
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                  <Lock className="w-3 h-3" /> Password
-                </label>
-                <input
-                  type="password"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-xl p-3 text-sm text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
-              </div>
+          <div className="space-y-1">
+            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+              <Lock className="w-3 h-3" /> Password
+            </label>
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                className="w-full bg-gray-700 border border-gray-600 rounded-xl p-3 pr-10 text-sm text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-300 transition-colors"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                  <Key className="w-3 h-3" /> Security Key
-                </label>
-                <input
-                  type="password"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-xl p-3 text-sm text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
-                  placeholder="••••••••"
-                  value={securityKey}
-                  onChange={(e) => setSecurityKey(e.target.value)}
-                  required
-                />
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                  <Lock className="w-3 h-3" /> Security Pin
-                </label>
-                <input
-                  type="password"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-xl p-3 text-sm text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
-                  placeholder="Enter pin"
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                  <Lock className="w-3 h-3" /> New Password
-                </label>
-                <input
-                  type="password"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-xl p-3 text-sm text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
-                  placeholder="••••••••"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  required
-                />
-              </div>
-            </>
-          )}
+          <div className="space-y-1">
+            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+              <Key className="w-3 h-3" /> Security Key
+            </label>
+            <div className="relative">
+              <input
+                type={showSecurityKey ? "text" : "password"}
+                className="w-full bg-gray-700 border border-gray-600 rounded-xl p-3 pr-10 text-sm text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+                placeholder="••••••••"
+                value={securityKey}
+                onChange={(e) => setSecurityKey(e.target.value)}
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowSecurityKey(!showSecurityKey)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-300 transition-colors"
+              >
+                {showSecurityKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
 
           {error && (
             <p className="text-red-400 text-xs font-medium text-center">{error}</p>
@@ -182,23 +140,10 @@ export default function SuperAdminLogin({ onLogin }: SuperAdminLoginProps) {
             {isLoading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
-              mode === 'login' ? 'Authorize Access' : 'Reset Password'
+              'Authorize Access'
             )}
           </button>
         </form>
-
-        <div className="mt-6 text-center">
-          <button
-            onClick={() => {
-              setMode(mode === 'login' ? 'forgot' : 'login');
-              setError('');
-              setSuccess('');
-            }}
-            className="text-xs font-bold text-indigo-400 hover:underline uppercase tracking-wider"
-          >
-            {mode === 'login' ? "Forgot Password?" : "Back to Sign In"}
-          </button>
-        </div>
 
         <div className="mt-8 pt-6 border-t border-gray-700 text-center">
           <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">

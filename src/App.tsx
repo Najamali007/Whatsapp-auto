@@ -54,7 +54,7 @@ export default function App() {
       case 'dashboard':
         return <Dashboard token={token} />;
       case 'agents':
-        return <Agents token={token} initialAgentId={selectedAgentId} />;
+        return <Agents token={token} initialAgentId={selectedAgentId} onNavigate={setActiveTab} />;
       case 'leads':
         return <Leads onOpenChat={(id) => {
           setSelectedConversationId(id);

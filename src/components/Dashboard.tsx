@@ -110,6 +110,76 @@ export default function Dashboard({ token }: DashboardProps) {
         </div>
       </div>
 
+      {/* User Profile & Tokens Section */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="md:col-span-2 bg-gray-900 rounded-[2.5rem] p-8 text-white relative overflow-hidden group shadow-2xl shadow-gray-900/20"
+        >
+          <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full -mr-32 -mt-32 blur-3xl group-hover:bg-indigo-500/20 transition-all duration-1000" />
+          <div className="relative z-10 flex flex-col md:flex-row items-center gap-8">
+            <div className="w-24 h-24 bg-white/10 rounded-3xl flex items-center justify-center border border-white/10 backdrop-blur-sm">
+              <Users className="w-12 h-12 text-indigo-400" />
+            </div>
+            <div className="flex-1 text-center md:text-left">
+              <div className="flex items-center justify-center md:justify-start gap-3 mb-2">
+                <h2 className="text-2xl font-black tracking-tight">{stats?.username || 'Administrator'}</h2>
+                <span className="px-3 py-1 bg-indigo-500/20 rounded-full text-[10px] font-black uppercase tracking-widest border border-indigo-500/30">Admin Account</span>
+              </div>
+              <p className="text-gray-400 text-sm font-medium mb-4">Member since {stats?.memberSince ? new Date(stats.memberSince).toLocaleDateString() : 'N/A'}</p>
+              <div className="flex flex-wrap justify-center md:justify-start gap-4">
+                <div className="px-4 py-2 bg-white/5 rounded-xl border border-white/5 flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4 text-indigo-400" />
+                  <span className="text-xs font-bold">{stats?.totalLeads || 0} Leads Managed</span>
+                </div>
+                <div className="px-4 py-2 bg-white/5 rounded-xl border border-white/5 flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-orange-400" />
+                  <span className="text-xs font-bold">{stats?.tokens || 0} Tokens Consumed</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm flex flex-col justify-between"
+        >
+          <div className="flex items-center justify-between mb-6">
+            <div className="w-12 h-12 bg-orange-50 rounded-2xl flex items-center justify-center">
+              <Zap className="w-6 h-6 text-orange-500" />
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Token Balance</p>
+              <h3 className="text-2xl font-black text-gray-900">{(stats?.tokenLimit || 0) - (stats?.tokens || 0)}</h3>
+            </div>
+          </div>
+          
+          <div className="space-y-4">
+            <div className="flex justify-between text-[10px] font-black uppercase tracking-widest">
+              <span className="text-gray-400">Usage Progress</span>
+              <span className="text-gray-900">{Math.round(((stats?.tokens || 0) / (stats?.tokenLimit || 1)) * 100)}%</span>
+            </div>
+            <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+              <motion.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.min(((stats?.tokens || 0) / (stats?.tokenLimit || 1)) * 100, 100)}%` }}
+                transition={{ duration: 1 }}
+                className={`h-full rounded-full ${
+                  ((stats?.tokens || 0) / (stats?.tokenLimit || 1)) > 0.9 ? 'bg-red-500' : 'bg-orange-500'
+                }`}
+              />
+            </div>
+            <p className="text-[10px] font-bold text-gray-400 text-center">
+              {stats?.tokens || 0} used of {stats?.tokenLimit || 0} total tokens
+            </p>
+          </div>
+        </motion.div>
+      </div>
+
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
         {kpiCards.map((card, i) => (

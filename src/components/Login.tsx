@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { MessageSquare, Lock, User, Loader2 } from 'lucide-react';
+import { MessageSquare, Lock, User, Loader2, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface LoginProps {
@@ -12,6 +12,8 @@ export default function Login({ onLogin }: LoginProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+
+  const [showPassword, setShowPassword] = useState(false);
 
   const validateForm = () => {
     const errors: Record<string, string> = {};
@@ -71,12 +73,12 @@ export default function Login({ onLogin }: LoginProps) {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1">
             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-              <User className="w-3 h-3" /> Username
+              <User className="w-3 h-3" /> Username / Admin
             </label>
             <input
               type="text"
               className={`w-full bg-gray-50 border ${validationErrors.username ? 'border-red-500' : 'border-gray-200'} rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all`}
-              placeholder="admin"
+              placeholder="example@gmail.com"
               value={username}
               onChange={(e) => {
                 setUsername(e.target.value);
@@ -94,20 +96,29 @@ export default function Login({ onLogin }: LoginProps) {
             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
               <Lock className="w-3 h-3" /> Password
             </label>
-            <input
-              type="password"
-              className={`w-full bg-gray-50 border ${validationErrors.password ? 'border-red-500' : 'border-gray-200'} rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all`}
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                if (validationErrors.password) setValidationErrors(prev => {
-                  const next = { ...prev };
-                  delete next.password;
-                  return next;
-                });
-              }}
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                className={`w-full bg-gray-50 border ${validationErrors.password ? 'border-red-500' : 'border-gray-200'} rounded-xl p-3 pr-10 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all`}
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (validationErrors.password) setValidationErrors(prev => {
+                    const next = { ...prev };
+                    delete next.password;
+                    return next;
+                  });
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
             {validationErrors.password && <p className="text-[10px] text-red-500 font-bold">{validationErrors.password}</p>}
           </div>
 

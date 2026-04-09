@@ -73,6 +73,8 @@ async function initDb() {
       table.integer('is_active').defaultTo(1);
       table.string('security_key').nullable();
       table.integer('is_global_autopilot').defaultTo(1);
+      table.integer('tokens').defaultTo(0);
+      table.integer('token_limit').defaultTo(0);
       table.timestamp('created_at').defaultTo(dbProxy.fn.now());
     });
   } else {
@@ -93,6 +95,13 @@ async function initDb() {
     if (!hasSecurityKey) {
       await dbProxy.schema.table('users', (table) => {
         table.string('security_key').nullable();
+      });
+    }
+    const hasTokens = await dbProxy.schema.hasColumn('users', 'tokens');
+    if (!hasTokens) {
+      await dbProxy.schema.table('users', (table) => {
+        table.integer('tokens').defaultTo(0);
+        table.integer('token_limit').defaultTo(0);
       });
     }
   }
@@ -515,6 +524,17 @@ async function initDb() {
       table.integer('user_id').unsigned().references('id').inTable('users').onDelete('CASCADE');
       table.string('type').notNullable(); // 'lead_added', 'lead_qualified', 'followup_sent', 'customer_converted', 'message_received'
       table.text('description');
+      table.timestamp('created_at').defaultTo(dbProxy.fn.now());
+    });
+  }
+
+  const hasAuditLogs = await dbProxy.schema.hasTable('audit_logs');
+  if (!hasAuditLogs) {
+    await dbProxy.schema.createTable('audit_logs', (table) => {
+      table.increments('id').primary();
+      table.integer('user_id').unsigned().references('id').inTable('users').onDelete('CASCADE');
+      table.string('action').notNullable();
+      table.text('details');
       table.timestamp('created_at').defaultTo(dbProxy.fn.now());
     });
   }
