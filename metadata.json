@@ -1,0 +1,5 @@
+{
+  "name": "Ondigix AI Automation System",
+  "description": "Ondigix: AI-powered WhatsApp automation with multi-agent support, QR-based connection, and enterprise-level admin dashboard.",
+  "requestFramePermissions": ["microphone"]
+}

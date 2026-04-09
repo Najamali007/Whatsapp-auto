@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800;900&family=Caveat:wght@400;700&display=swap');
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-handwriting: "Caveat", cursive;
+  
+  --color-primary: #00C853;
+  --color-primary-hover: #00B24A;
+  --color-whatsapp: #25D366;
+}
+
+@layer base {
+  body {
+    @apply antialiased text-slate-900 font-sans bg-[#F8FAFC];
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display tracking-tight;
+  }
+}
+
+@layer utilities {
+  .bg-whatsapp-pattern {
+    position: relative;
+    background-color: #e5ddd5;
+    z-index: 0;
+  }
+
+  .bg-whatsapp-pattern::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png");
+    background-repeat: repeat;
+    background-size: 400px;
+    opacity: 0.08;
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  .glass-card {
+    @apply bg-white/80 backdrop-blur-2xl border border-white/50 shadow-[0_8px_32px_0_rgba(31,38,135,0.07)];
+  }
+
+  .advanced-input {
+    @apply w-full bg-slate-50/50 border border-slate-200/60 rounded-2xl px-6 py-5 text-base font-semibold 
+           focus:ring-4 focus:ring-primary/10 focus:border-primary focus:bg-white outline-none transition-all 
+           placeholder:text-slate-300 shadow-sm hover:border-slate-300;
+  }
+
+  .section-label {
+    @apply flex items-center gap-2.5 text-[11px] font-black text-slate-400 uppercase tracking-[0.25em] mb-4;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #E2E8F0;
+    border-radius: 10px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #CBD5E1;
+  }
+}
