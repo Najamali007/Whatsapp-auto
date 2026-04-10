@@ -2,19 +2,27 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Outfit", ui-sans-serif, system-ui, sans-serif;
   --font-handwriting: "Caveat", cursive;
   
-  --color-primary: #00C853;
-  --color-primary-hover: #00B24A;
+  --color-primary: #25D366;
+  --color-primary-hover: #128C7E;
   --color-whatsapp: #25D366;
 }
 
 @layer base {
   body {
-    @apply antialiased text-slate-900 font-sans bg-[#F8FAFC];
+    @apply antialiased text-slate-900 font-sans bg-[#F8FAFC] no-scrollbar;
   }
   
   h1, h2, h3, h4, h5, h6 {
@@ -67,5 +75,15 @@
   }
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: #CBD5E1;
+  }
+
+  .modal-blur-container {
+    transition: filter 0.3s ease, opacity 0.3s ease;
+  }
+
+  .modal-blur-active {
+    filter: blur(8px) grayscale(0.2);
+    pointer-events: none;
+    user-select: none;
   }
 }

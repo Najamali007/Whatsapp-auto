@@ -180,7 +180,7 @@ export default function AgentGuide({ agentId, token }: AgentGuideProps) {
   };
 
   return (
-    <div className="flex flex-col h-full max-w-6xl mx-auto p-6 md:p-12 gap-8">
+    <div className="flex flex-col h-full w-full p-6 md:p-12 gap-8">
       <div className="flex flex-col md:flex-row gap-8 flex-1 overflow-hidden">
         {/* Chat Interface */}
         <div className="flex-1 flex flex-col bg-white border border-gray-100 rounded-[2.5rem] shadow-xl shadow-gray-200/50 overflow-hidden">

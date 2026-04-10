@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Save, Key, Trash2, AlertCircle, CheckCircle2, Loader2, RefreshCw, Coins, X, Globe, Plus, ExternalLink } from 'lucide-react';
+import { Save, Key, Trash2, AlertCircle, CheckCircle2, Loader2, RefreshCw, Coins, X, Globe, Plus, ExternalLink, LayoutDashboard, Users, Zap, Target } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 
 interface ApiSetting {
   id: number;
   provider: string;
   api_key: string;
+  base_url?: string;
+  model?: string;
   status: string;
   is_active: number;
   credits_remaining: number;
@@ -34,25 +36,51 @@ export default function Settings() {
   const [saving, setSaving] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [newKeys, setNewKeys] = useState<Record<string, string>>({});
+  const [baseUrls, setBaseUrls] = useState<Record<string, string>>({});
+  const [models, setModels] = useState<Record<string, string>>({});
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [resetInput, setResetInput] = useState('');
   const [resetConfirm, setResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [dashStats, setDashStats] = useState<any>(null);
+  const [loadingStats, setLoadingStats] = useState(false);
 
   useEffect(() => {
     fetchSettings();
     fetchWebsites();
+    fetchDashStats();
   }, []);
+
+  const fetchDashStats = async () => {
+    const role = localStorage.getItem('user_role');
+    if (role !== 'super_admin') return;
+    
+    setLoadingStats(true);
+    try {
+      const data = await apiFetch('/api/super-admin/stats');
+      setDashStats(data);
+    } catch (error) {
+      console.error('Failed to fetch dashboard stats:', error);
+    } finally {
+      setLoadingStats(false);
+    }
+  };
 
   const fetchSettings = async () => {
     try {
       const data = await apiFetch('/api/settings');
       setSettings(data);
       const keys: Record<string, string> = {};
+      const urls: Record<string, string> = {};
+      const mods: Record<string, string> = {};
       data.forEach((s: ApiSetting) => {
         keys[s.provider] = s.api_key;
+        urls[s.provider] = s.base_url || '';
+        mods[s.provider] = s.model || '';
       });
       setNewKeys(keys);
+      setBaseUrls(urls);
+      setModels(mods);
     } catch (error) {
       console.error('Failed to fetch settings:', error);
     } finally {
@@ -121,6 +149,8 @@ export default function Settings() {
 
   const handleSave = async (provider: string) => {
     const apiKey = newKeys[provider];
+    const baseUrl = baseUrls[provider];
+    const model = models[provider];
     if (!apiKey) return;
 
     setSaving(provider);
@@ -129,7 +159,7 @@ export default function Settings() {
     try {
       const response = await apiFetch('/api/settings', {
         method: 'POST',
-        body: JSON.stringify({ provider, api_key: apiKey })
+        body: JSON.stringify({ provider, api_key: apiKey, base_url: baseUrl, model: model })
       });
       setMessage({ 
         type: 'success', 
@@ -179,7 +209,7 @@ export default function Settings() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="flex items-center justify-center min-h-[400px]">
         <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
       </div>
     );
@@ -255,30 +285,59 @@ export default function Settings() {
                         </span>
                       )}
                     </div>
-                    <div className="flex gap-2">
-                      <input
-                        type="password"
-                        value={newKeys[provider.id] || ''}
-                        onChange={(e) => setNewKeys({ ...newKeys, [provider.id]: e.target.value })}
-                        placeholder={`Enter ${provider.name} API Key`}
-                        className="flex-1 px-4 py-2 rounded-lg bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                      />
-                      <button
-                        onClick={() => handleSave(provider.id)}
-                        disabled={isSaving || !newKeys[provider.id]}
-                        className="px-4 py-2 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium"
-                      >
-                        {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                        Save
-                      </button>
-                      {setting && (
+                    <div className="space-y-4">
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">API Key</label>
+                        <input
+                          type="password"
+                          value={newKeys[provider.id] || ''}
+                          onChange={(e) => setNewKeys({ ...newKeys, [provider.id]: e.target.value })}
+                          placeholder={`Enter ${provider.name} API Key`}
+                          className="w-full px-4 py-2 rounded-lg bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                        />
+                      </div>
+                      
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Base URL (Optional)</label>
+                          <input
+                            type="text"
+                            value={baseUrls[provider.id] || ''}
+                            onChange={(e) => setBaseUrls({ ...baseUrls, [provider.id]: e.target.value })}
+                            placeholder="https://api.deepseek.com"
+                            className="w-full px-4 py-2 rounded-lg bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Model (Optional)</label>
+                          <input
+                            type="text"
+                            value={models[provider.id] || ''}
+                            onChange={(e) => setModels({ ...models, [provider.id]: e.target.value })}
+                            placeholder="deepseek-chat"
+                            className="w-full px-4 py-2 rounded-lg bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2">
                         <button
-                          onClick={() => setDeleteConfirm(provider.id)}
-                          className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+                          onClick={() => handleSave(provider.id)}
+                          disabled={isSaving || !newKeys[provider.id]}
+                          className="flex-1 px-4 py-2 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white rounded-lg transition-colors flex items-center justify-center gap-2 text-sm font-medium"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                          Save Configuration
                         </button>
-                      )}
+                        {setting && (
+                          <button
+                            onClick={() => setDeleteConfirm(provider.id)}
+                            className="p-2 text-gray-400 hover:text-red-500 transition-colors bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-lg"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );

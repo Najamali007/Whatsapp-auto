@@ -616,7 +616,7 @@ export default function Campaigns() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="p-3 bg-blue-50 rounded-2xl">
-                    <Plus className="w-5 h-5 text-blue-600" />
+                    <X className="w-5 h-5 text-blue-600" />
                   </div>
                   <h4 className="font-black text-gray-900 uppercase tracking-widest text-sm">New Lead Automation</h4>
                 </div>

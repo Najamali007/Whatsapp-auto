@@ -17,6 +17,7 @@ import {
   Activity,
   Copy,
   MessageSquare,
+  Layers,
   X
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
@@ -64,6 +65,8 @@ interface LeadsProps {
 const Leads: React.FC<LeadsProps> = ({ onOpenChat }) => {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [stats, setStats] = useState<LeadStats>({ total: 0, new_count: 0, recent_count: 0 });
+  const [channels, setChannels] = useState<any[]>([]);
+  const [selectedChannel, setSelectedChannel] = useState<string>('all');
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -151,9 +154,10 @@ const Leads: React.FC<LeadsProps> = ({ onOpenChat }) => {
 
   const fetchLeads = async () => {
     try {
-      const data = await apiFetch('/api/leads');
+      const queryParams = selectedChannel !== 'all' ? `?sessionId=${selectedChannel}` : '';
+      const data = await apiFetch(`/api/leads${queryParams}`);
       setLeads(data);
-      const statsData = await apiFetch('/api/leads/stats');
+      const statsData = await apiFetch(`/api/leads/stats${queryParams}`);
       setStats(statsData);
     } catch (error) {
       console.error('Failed to fetch leads:', error);
@@ -163,9 +167,22 @@ const Leads: React.FC<LeadsProps> = ({ onOpenChat }) => {
     }
   };
 
+  const fetchChannels = async () => {
+    try {
+      const data = await apiFetch('/api/whatsapp/sessions');
+      setChannels(data);
+    } catch (error) {
+      console.error('Failed to fetch channels:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchChannels();
+  }, []);
+
   useEffect(() => {
     fetchLeads();
-  }, []);
+  }, [selectedChannel]);
 
   const handleRefresh = () => {
     setRefreshing(true);
@@ -416,6 +433,21 @@ const Leads: React.FC<LeadsProps> = ({ onOpenChat }) => {
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-10 pr-4 py-2 bg-gray-50 border-none rounded-xl focus:ring-2 focus:ring-indigo-500 transition-all"
             />
+          </div>
+          <div className="flex items-center gap-2">
+            <Layers className="w-5 h-5 text-gray-400" />
+            <select 
+              value={selectedChannel}
+              onChange={(e) => setSelectedChannel(e.target.value)}
+              className="bg-gray-50 border-none rounded-xl focus:ring-2 focus:ring-indigo-500 py-2 pl-3 pr-8 text-sm font-medium text-gray-700"
+            >
+              <option value="all">All Channels</option>
+              {channels.map(channel => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.name || channel.number || `Channel ${channel.id}`}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="flex items-center gap-2">
             <Filter className="w-5 h-5 text-gray-400" />

@@ -50,8 +50,19 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
+
 app.use(cors());
 app.use(express.json());
+
+// Health check route
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 app.use('/uploads', express.static(uploadsDir));
 
 // Multer setup
@@ -63,13 +74,13 @@ const authenticateToken = (req: any, res: any, next: any) => {
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token || token === 'null' || token === 'undefined') {
-    console.warn('Authentication failed: No token provided');
+    console.warn(`[${new Date().toISOString()}] Authentication failed: No token provided for ${req.url}`);
     return res.sendStatus(401);
   }
 
   jwt.verify(token, JWT_SECRET, async (err: any, user: any) => {
     if (err) {
-      console.warn('Authentication failed: Invalid token', err.message);
+      console.warn(`[${new Date().toISOString()}] Authentication failed: Invalid token for ${req.url}`, err.message);
       return res.sendStatus(403);
     }
     
@@ -77,19 +88,20 @@ const authenticateToken = (req: any, res: any, next: any) => {
       // Verify user still exists in DB and is active
       const dbUser = await db.prepare('SELECT id, role, is_active FROM users WHERE id = ?').get(user.id) as any;
       if (!dbUser) {
-        console.warn('Authentication failed: User no longer exists');
+        console.warn(`[${new Date().toISOString()}] Authentication failed: User ${user.id} no longer exists`);
         return res.sendStatus(403);
       }
 
       if (!dbUser.is_active) {
-        console.warn('Authentication failed: User is inactive');
+        console.warn(`[${new Date().toISOString()}] Authentication failed: User ${user.id} is inactive`);
         return res.status(403).json({ error: 'Account is deactivated' });
       }
 
       req.user = { ...user, role: dbUser.role };
+      console.log(`[${new Date().toISOString()}] Authenticated user ${user.id} (${dbUser.role}) for ${req.url}`);
       next();
     } catch (error) {
-      console.error('Authentication error during DB check:', error);
+      console.error(`[${new Date().toISOString()}] Authentication error during DB check for ${req.url}:`, error);
       return res.sendStatus(500);
     }
   });
@@ -187,27 +199,34 @@ const validateApiKey = async (provider: string, apiKey: string) => {
 // --- Super Admin Routes ---
 app.get('/api/super-admin/stats', authenticateSuperAdmin, async (req, res) => {
   try {
+    console.log(`[${new Date().toISOString()}] Fetching super-admin stats...`);
     const totalAdmins = await db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get() as any;
     const activeAdmins = await db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND is_active = 1").get() as any;
     const totalLeads = await db.prepare("SELECT COUNT(*) as count FROM leads").get() as any;
     const totalTokensUsed = await db.prepare("SELECT SUM(tokens) as total FROM users WHERE role = 'admin'").get() as any;
     
-    res.json({
+    const stats = {
       totalAdmins: totalAdmins.count,
       activeAdmins: activeAdmins.count,
       totalLeads: totalLeads.count,
       totalTokensUsed: totalTokensUsed.total || 0
-    });
+    };
+    console.log(`[${new Date().toISOString()}] Stats fetched:`, stats);
+    res.json(stats);
   } catch (error) {
+    console.error(`[${new Date().toISOString()}] Error fetching stats:`, error);
     res.status(500).json({ error: 'Failed to fetch stats' });
   }
 });
 
 app.get('/api/super-admin/admins', authenticateSuperAdmin, async (req, res) => {
   try {
+    console.log(`[${new Date().toISOString()}] Fetching admins for super-admin...`);
     const admins = await db.prepare("SELECT id, username, role, is_active, tokens, token_limit, created_at FROM users WHERE role = 'admin'").all();
+    console.log(`[${new Date().toISOString()}] Found ${Array.isArray(admins) ? admins.length : 0} admins.`);
     res.json(admins);
   } catch (error) {
+    console.error(`[${new Date().toISOString()}] Error fetching admins:`, error);
     res.status(500).json({ error: 'Failed to fetch admins' });
   }
 });
@@ -218,9 +237,14 @@ app.post('/api/super-admin/admins', authenticateSuperAdmin, async (req, res) => 
 
   try {
     const hashedPassword = bcrypt.hashSync(password, 10);
+    const initialTokens = token_limit || tokens || 0;
     const result = await db.prepare('INSERT INTO users (username, password, role, is_active, tokens, token_limit) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(username, hashedPassword, 'admin', 1, tokens || 0, token_limit || 0);
-    res.json({ id: result.lastInsertRowid, username, role: 'admin', is_active: 1, tokens: tokens || 0, token_limit: token_limit || 0 });
+      .run(username, hashedPassword, 'admin', 1, initialTokens, initialTokens);
+    
+    io.emit('admin_update');
+    io.emit('super_admin_stats_update');
+    
+    res.json({ id: result.lastInsertRowid, username, role: 'admin', is_active: 1, tokens: initialTokens, token_limit: initialTokens });
   } catch (error: any) {
     if (error.message.includes('UNIQUE')) {
       return res.status(400).json({ error: 'Username already exists' });
@@ -239,12 +263,14 @@ app.put('/api/super-admin/admins/:id', authenticateSuperAdmin, async (req, res) 
     if (is_active !== undefined) {
       await db.prepare('UPDATE users SET is_active = ? WHERE id = ? AND role = ?').run(is_active ? 1 : 0, req.params.id, 'admin');
     }
-    if (tokens !== undefined) {
-      await db.prepare('UPDATE users SET tokens = ? WHERE id = ? AND role = ?').run(tokens, req.params.id, 'admin');
-    }
     if (token_limit !== undefined) {
-      await db.prepare('UPDATE users SET token_limit = ? WHERE id = ? AND role = ?').run(token_limit, req.params.id, 'admin');
+      await db.prepare('UPDATE users SET tokens = ?, token_limit = ? WHERE id = ? AND role = ?').run(token_limit, token_limit, req.params.id, 'admin');
     }
+    
+    io.emit('admin_update');
+    io.emit('super_admin_stats_update');
+    io.emit('token_update', { userId: req.params.id });
+    
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to update admin' });
@@ -269,6 +295,10 @@ app.get('/api/super-admin/audit-logs', authenticateSuperAdmin, async (req, res) 
 app.delete('/api/super-admin/admins/:id', authenticateSuperAdmin, async (req, res) => {
   try {
     await db.prepare("DELETE FROM users WHERE id = ? AND role = 'admin'").run(req.params.id);
+    
+    io.emit('admin_update');
+    io.emit('super_admin_stats_update');
+    
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete admin' });
@@ -303,14 +333,17 @@ app.post('/api/settings', authenticateSuperAdmin, async (req: any, res) => {
       return res.status(400).json({ error: validation.error || 'Invalid API key' });
     }
 
-    // Settings are now global (user_id = 0 or similar)
+    // Settings are now global (linked to first super admin)
+    const superAdmin = await db.prepare("SELECT id FROM users WHERE role = 'super_admin' LIMIT 1").get() as any;
+    const targetUserId = superAdmin ? superAdmin.id : req.user.id;
+
     const existing = await db.prepare('SELECT id FROM settings WHERE provider = ?').get(provider) as any;
     if (existing) {
       await db.prepare("UPDATE settings SET api_key = ?, base_url = ?, model = ?, is_active = 1, status = 'active', credits_remaining = ? WHERE id = ?")
         .run(api_key, base_url || null, model || null, validation.credits, existing.id);
     } else {
       await db.prepare('INSERT INTO settings (user_id, provider, api_key, base_url, model, credits_remaining) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(0, provider, api_key, base_url || null, model || null, validation.credits);
+        .run(targetUserId, provider, api_key, base_url || null, model || null, validation.credits);
     }
     
     res.json({ 
@@ -616,6 +649,13 @@ app.get('/api/whatsapp/sessions', authenticateToken, async (req: any, res) => {
 
 app.post('/api/whatsapp/sessions', authenticateToken, async (req: any, res) => {
   const { agent_id, name } = req.body;
+  
+  // Check if agent is already assigned to another session
+  const existingSession = await db.prepare('SELECT id FROM whatsapp_sessions WHERE agent_id = ? AND user_id = ?').get(agent_id, req.user.id);
+  if (existingSession) {
+    return res.status(400).json({ error: 'This agent is already assigned to another channel. Each bot must be assigned to a specific channel.' });
+  }
+
   const result = await db.prepare('INSERT INTO whatsapp_sessions (user_id, agent_id, name) VALUES (?, ?, ?)').run(req.user.id, agent_id, name);
   res.json({ id: result.lastInsertRowid });
 });
@@ -821,20 +861,32 @@ app.get('/api/conversations/unread-count', authenticateToken, async (req: any, r
 });
 
 app.get('/api/conversations', authenticateToken, async (req: any, res) => {
-  const conversations = await db.prepare(`
-    SELECT 
-      c.*, 
-      COALESCE(c.contact_name, (SELECT name FROM contacts WHERE jid = c.contact_number AND name IS NOT NULL LIMIT 1)) as contact_name,
-      ws.number as session_number, 
-      a.name as agent_name,
-      (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_content,
-      (SELECT type FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_type
-    FROM conversations c
-    JOIN whatsapp_sessions ws ON c.session_id = ws.id
-    JOIN agents a ON ws.agent_id = a.id
-    WHERE ws.user_id = ?
-    ORDER BY c.last_message_at DESC
-  `).all(req.user.id) as any[];
+  const { sessionId } = req.query;
+  try {
+    let sql = `
+      SELECT 
+        c.*, 
+        COALESCE(c.contact_name, (SELECT name FROM contacts WHERE jid = c.contact_number AND name IS NOT NULL LIMIT 1)) as contact_name,
+        ws.number as session_number, 
+        a.name as agent_name,
+        (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_content,
+        (SELECT type FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_type
+      FROM conversations c
+      JOIN whatsapp_sessions ws ON c.session_id = ws.id
+      JOIN agents a ON ws.agent_id = a.id
+      WHERE ws.user_id = ?
+    `;
+
+    if (sessionId) {
+      sql += ` AND c.session_id = ?`;
+    }
+
+    sql += ` ORDER BY c.last_message_at DESC`;
+
+    const query = db.prepare(sql);
+    const conversations = sessionId 
+      ? await query.all(req.user.id, sessionId) 
+      : await query.all(req.user.id);
 
   // Parse labels JSON
   const parsedConversations = conversations.map(c => ({
@@ -842,7 +894,11 @@ app.get('/api/conversations', authenticateToken, async (req: any, res) => {
     labels: c.labels ? JSON.parse(c.labels) : []
   }));
 
-  res.json(parsedConversations);
+    res.json(parsedConversations);
+  } catch (error) {
+    console.error('Failed to fetch conversations:', error);
+    res.status(500).json({ error: 'Failed to fetch conversations' });
+  }
 });
 
 // --- Social Accounts Routes ---
@@ -1016,7 +1072,7 @@ const simulateIncomingSocialMessages = async () => {
   }
 };
 
-setInterval(simulateIncomingSocialMessages, 30000);
+// setInterval(simulateIncomingSocialMessages, 30000);
 
 // --- Audit Status Routes ---
 app.post('/api/conversations/:id/audit', authenticateToken, async (req: any, res) => {
@@ -1099,32 +1155,37 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: any, res) => {
       db.prepare('SELECT tokens, token_limit, username, created_at FROM users WHERE id = ?').get(userId)
     ]);
 
-    const calculateGrowth = (current: number, totalBefore: number) => {
-      if (totalBefore === 0) return current > 0 ? 100 : 0;
-      const currentMonthAdded = current - totalBefore;
-      // This is a bit tricky without full history, let's just compare "added this month" vs "added last month" if possible
-      // For now, let's do a simple (current - last) / last * 100
-      return parseFloat(((currentMonthAdded / (totalBefore || 1)) * 100).toFixed(1));
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const calculateGrowth = (current: any, totalBefore: any) => {
+      const curr = (current && typeof current.count === 'number') ? current.count : 0;
+      const prev = (totalBefore && typeof totalBefore.count === 'number') ? totalBefore.count : 0;
+      if (prev === 0) return curr > 0 ? 100 : 0;
+      const currentMonthAdded = curr - prev;
+      return parseFloat(((currentMonthAdded / (prev || 1)) * 100).toFixed(1));
     };
 
     res.json({
-      totalLeads: currentLeads.count || 0,
-      qualifiedLeads: currentQualified.count || 0,
-      conversions: currentConversions.count || 0,
-      inboxMessages: messages.count || 0,
-      activeCampaigns: campaigns.count || 0,
-      totalCustomers: customers.count || 0,
+      totalLeads: currentLeads?.count || 0,
+      qualifiedLeads: currentQualified?.count || 0,
+      conversions: currentConversions?.count || 0,
+      inboxMessages: messages?.count || 0,
+      activeCampaigns: campaigns?.count || 0,
+      totalCustomers: customers?.count || 0,
       tokens: user.tokens || 0,
       tokenLimit: user.token_limit || 0,
       username: user.username,
+      email: user.username, // Using username as email
       memberSince: user.created_at,
       growth: {
-        leads: calculateGrowth(currentLeads.count, lastLeads.count),
-        qualified: calculateGrowth(currentQualified.count, lastQualified.count),
-        conversions: calculateGrowth(currentConversions.count, lastConversions.count),
+        leads: calculateGrowth(currentLeads, lastLeads),
+        qualified: calculateGrowth(currentQualified, lastQualified),
+        conversions: calculateGrowth(currentConversions, lastConversions),
         messages: 0,
         campaigns: 0,
-        customers: calculateGrowth(customers.count, lastConversions.count)
+        customers: 0
       }
     });
   } catch (error) {
@@ -1617,14 +1678,25 @@ app.post('/api/whatsapp/send', authenticateToken, upload.single('file'), async (
 
 // --- Leads Routes ---
 app.get('/api/leads', authenticateToken, async (req: any, res) => {
+  const { sessionId } = req.query;
   try {
-    const leads = await db.prepare(`
+    let sql = `
       SELECT l.*, c.contact_number, c.contact_name, c.labels, c.audit_status, c.is_ordered, c.is_saved, c.is_audited
       FROM leads l
       JOIN conversations c ON l.conversation_id = c.id
       WHERE l.user_id = ?
-      ORDER BY l.created_at DESC
-    `).all(req.user.id) as any[];
+    `;
+
+    if (sessionId) {
+      sql += ` AND c.session_id = ?`;
+    }
+
+    sql += ` ORDER BY l.created_at DESC`;
+
+    const query = db.prepare(sql);
+    const leads = sessionId 
+      ? await query.all(req.user.id, sessionId) 
+      : await query.all(req.user.id);
     
     // Parse labels JSON
     const parsedLeads = leads.map(l => ({
@@ -1642,16 +1714,27 @@ app.get('/api/leads', authenticateToken, async (req: any, res) => {
 });
 
 app.get('/api/leads/stats', authenticateToken, async (req: any, res) => {
+  const { sessionId } = req.query;
   try {
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const stats = await db.prepare(`
+    let sql = `
       SELECT 
         COUNT(*) as total,
         SUM(CASE WHEN is_new = 1 THEN 1 ELSE 0 END) as new_count,
-        SUM(CASE WHEN created_at > ? THEN 1 ELSE 0 END) as recent_count
-      FROM leads
-      WHERE user_id = ?
-    `).get(oneDayAgo, req.user.id);
+        SUM(CASE WHEN l.created_at > ? THEN 1 ELSE 0 END) as recent_count
+      FROM leads l
+      JOIN conversations c ON l.conversation_id = c.id
+      WHERE l.user_id = ?
+    `;
+
+    if (sessionId) {
+      sql += ` AND c.session_id = ?`;
+    }
+
+    const query = db.prepare(sql);
+    const stats = sessionId 
+      ? await query.get(oneDayAgo, req.user.id, sessionId) 
+      : await query.get(oneDayAgo, req.user.id);
     res.json(stats);
   } catch (error) {
     console.error('Failed to fetch lead stats:', error);

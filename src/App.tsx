@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import Layout from './components/Layout';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
@@ -14,6 +15,9 @@ import LoadingOverlay from './components/LoadingOverlay';
 
 import SuperAdminLogin from './components/SuperAdminLogin';
 import SuperAdminDashboard from './components/SuperAdminDashboard';
+import SuperAdminOverview from './components/SuperAdminOverview';
+import TokenTopupModal from './components/TokenTopupModal';
+import socket from './lib/socket';
 
 export default function App() {
   const [token, setToken] = useState<string | null>(() => {
@@ -24,6 +28,30 @@ export default function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
   const [isSuperAdminPath] = useState(() => window.location.pathname === '/super-admin');
+  const [showTokenModal, setShowTokenModal] = useState(false);
+
+  useEffect(() => {
+    socket.on('token_limit_reached', () => {
+      const userRole = localStorage.getItem('user_role');
+      if (userRole !== 'super_admin') {
+        setShowTokenModal(true);
+      }
+    });
+
+    socket.on('navigate_to_tab', (tab: string) => {
+      setActiveTab(tab);
+    });
+
+    socket.on('force_refresh', () => {
+      window.location.reload();
+    });
+
+    return () => {
+      socket.off('token_limit_reached');
+      socket.off('navigate_to_tab');
+      socket.off('force_refresh');
+    };
+  }, []);
 
   const handleLogin = (newToken: string) => {
     setToken(newToken);
@@ -49,10 +77,12 @@ export default function App() {
     );
   }
 
+  const userRole = localStorage.getItem('user_role');
+
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard token={token} />;
+        return userRole === 'super_admin' ? <SuperAdminOverview /> : <Dashboard token={token} />;
       case 'agents':
         return <Agents token={token} initialAgentId={selectedAgentId} onNavigate={setActiveTab} />;
       case 'leads':
@@ -89,8 +119,20 @@ export default function App() {
         }} 
         onLogout={handleLogout}
       >
-        {renderContent()}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="h-full"
+          >
+            {renderContent()}
+          </motion.div>
+        </AnimatePresence>
       </Layout>
+      <TokenTopupModal isOpen={showTokenModal} onClose={() => setShowTokenModal(false)} />
       <LoadingOverlay />
     </>
   );

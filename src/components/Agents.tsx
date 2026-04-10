@@ -341,7 +341,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
   }
 
   return (
-    <div className="h-full flex flex-col relative overflow-hidden">
+    <div className="min-h-[600px] flex flex-col relative">
       {/* Top Navigation */}
       <div className="flex items-center px-8 border-b border-gray-100 bg-white/80 backdrop-blur-md sticky top-0 z-20">
         <div className="flex items-center gap-2 mr-6 pr-6 border-r border-gray-100">
@@ -445,7 +445,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
         {/* Main Area */}
         <div className={`flex-1 overflow-y-auto ${!selectedAgentId && activeSubTab === 'agents' ? 'hidden md:block' : 'block'}`}>
           {activeSubTab === 'agents' ? (
-            <div className="max-w-6xl mx-auto p-6 md:p-12">
+            <div className="w-full p-6 md:p-12">
               <div className="mb-12 flex items-center justify-between">
                 <div>
                   <div className="flex items-center gap-3 mb-3">
@@ -622,7 +622,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                       >
                         <div className="absolute inset-0 bg-white/20 translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500" />
                         <span className="relative flex items-center gap-3">
-                          {selectedAgentId ? <RefreshCw className="w-5 h-5 animate-spin-slow" /> : <Plus className="w-5 h-5" />}
+                          {selectedAgentId ? <RefreshCw className="w-5 h-5 animate-spin-slow" /> : <X className="w-5 h-5" />}
                           {selectedAgentId ? 'Update Intelligence' : 'Deploy Agent'}
                         </span>
                       </button>
@@ -632,7 +632,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
               </div>
             </div>
           ) : activeSubTab === 'knowledge' ? (
-            <div className="max-w-6xl mx-auto p-6 md:p-12">
+            <div className="w-full p-6 md:p-12">
               <div className="mb-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div className="flex items-center justify-between w-full md:w-auto">
                   <div>
@@ -722,7 +722,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
               )}
             </div>
           ) : activeSubTab === 'strategies' ? (
-            <div className="max-w-4xl mx-auto p-6 md:p-12">
+            <div className="w-full p-6 md:p-12">
               <div className="mb-10 flex items-center justify-between">
                 <div>
                   <h2 className="text-3xl font-black text-gray-900 mb-1 tracking-tight">Strategies</h2>
@@ -788,7 +788,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
         </div>
 
         {/* Right Area - Mobile Preview */}
-        <div className="hidden xl:flex w-[360px] border-l border-gray-100 bg-white/30 backdrop-blur-sm flex-col items-center justify-start p-6 relative shrink-0 overflow-y-auto scrollbar-hide">
+        <div className={`hidden xl:flex w-[360px] border-l border-gray-100 bg-white/30 backdrop-blur-sm flex-col items-center justify-start p-6 relative shrink-0 overflow-y-auto scrollbar-hide ${activeSubTab === 'guide' ? '!hidden' : ''}`}>
           <div className="absolute top-6 right-6 text-right">
             <p className="text-primary font-handwriting text-lg rotate-[-5deg] leading-tight">
               Live Preview ⤵

@@ -577,7 +577,7 @@ async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: pro
             const template = rule.template.replace('{Name}', conversation.contact_name || 'there');
             
             // Check if this exact template was sent recently to this conversation
-            const lastAgentMsg = await db.prepare('SELECT content FROM messages WHERE conversation_id = ? AND sender = "agent" ORDER BY created_at DESC LIMIT 1').get(savedMsg.conversationId) as any;
+            const lastAgentMsg = await db.prepare("SELECT content FROM messages WHERE conversation_id = ? AND sender = 'agent' ORDER BY created_at DESC LIMIT 1").get(savedMsg.conversationId) as any;
             
             if (lastAgentMsg && lastAgentMsg.content === template) {
               console.log(`Automation rule duplicate detected for stage: ${lead.status}. Skipping.`);
@@ -671,13 +671,14 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     // Token Check
     const user = await db.prepare('SELECT role, tokens, token_limit FROM users WHERE id = ?').get(session.user_id) as any;
     if (user && user.role === 'admin') {
-      if (user.tokens >= user.token_limit) {
-        console.log(`Admin ${session.user_id} has reached token limit (${user.tokens}/${user.token_limit}). Stopping agent.`);
+      if (user.tokens <= 0) {
+        console.log(`Admin ${session.user_id} has no tokens left. Stopping agent.`);
         await db.prepare('UPDATE conversations SET is_autopilot = 0 WHERE id = ?').run(conversation.id);
+        io.emit('token_limit_reached', { userId: session.user_id });
         io.emit('new_message', {
           conversation_id: conversation.id,
           sender: 'system',
-          content: 'Agent stopped: Token limit reached.',
+          content: 'Agent stopped: No tokens remaining. Please contact WhatsApp Auto Team for top-up.',
           type: 'system',
           created_at: new Date().toISOString()
         });
@@ -827,7 +828,7 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
       3. Strategic Goal: What is the single most important thing to say right now to provide value or move the conversation forward?
       4. Avoid Robotic Patterns: Do NOT use meta-commentary like "I saw you replied" or "I noticed your message". Humans don't say that.
       5. Single Message Constraint: Formulate the entire response into ONE clear, concise, and natural message.
-      6. Human Check: Does this sound like a helpful person at Webdo Solutions, or a bot?
+      6. Human Check: Does this sound like a helpful person at Ondigix Solutions, or a bot?
       
       CONVERSATION RULES:
       - ${greetingInstruction}
@@ -891,9 +892,9 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
 
     // Consume token for admin
     if (user && user.role === 'admin') {
-      await db.prepare('UPDATE users SET tokens = tokens + 1 WHERE id = ?').run(session.user_id);
+      await db.prepare('UPDATE users SET tokens = tokens - 1 WHERE id = ?').run(session.user_id);
       await db.prepare('INSERT INTO audit_logs (user_id, action, details) VALUES (?, ?, ?)')
-        .run(session.user_id, 'token_consumed', `Token consumed for message in conversation ${conversation.id}. New total: ${user.tokens + 1}`);
+        .run(session.user_id, 'token_consumed', `Token consumed for message in conversation ${conversation.id}. New total: ${user.tokens - 1}`);
     }
 
     // Update Timestamps

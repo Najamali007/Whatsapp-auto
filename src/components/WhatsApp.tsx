@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { QrCode, Plus, Trash2, RefreshCw, Loader2, Smartphone, CheckCircle2, XCircle, AlertCircle, Facebook, Instagram, MessageSquare, ExternalLink, Settings } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { QrCode, Plus, Trash2, RefreshCw, Loader2, Smartphone, CheckCircle2, XCircle, AlertCircle, Facebook, Instagram, MessageSquare, ExternalLink, Settings, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { io, Socket } from 'socket.io-client';
 import QRCode from 'qrcode';
@@ -37,6 +38,14 @@ export default function WhatsApp({ token }: WhatsAppProps) {
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: number | 'bulk', count?: number } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const isModalOpen = !!deleteConfirm || isConnectingSocial;
+    const event = new CustomEvent('toggle-modal-blur', { 
+      detail: { isOpen: isModalOpen } 
+    });
+    window.dispatchEvent(event);
+  }, [deleteConfirm, isConnectingSocial]);
 
   const fetchData = async () => {
     try {
@@ -309,7 +318,7 @@ export default function WhatsApp({ token }: WhatsAppProps) {
               onClick={() => setIsAdding(true)}
               className="bg-primary text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-primary/20"
             >
-              <Plus className="w-4 h-4" /> Add Number
+              <X className="w-4 h-4" /> Add Number
             </button>
           </div>
 
@@ -400,13 +409,13 @@ export default function WhatsApp({ token }: WhatsAppProps) {
       </AnimatePresence>
 
       <AnimatePresence>
-        {deleteConfirm && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        {deleteConfirm && createPortal(
+          <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl"
+              className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl border border-gray-100"
             >
               <div className="w-16 h-16 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mb-6 mx-auto">
                 <Trash2 className="w-8 h-8" />
@@ -433,7 +442,8 @@ export default function WhatsApp({ token }: WhatsAppProps) {
                 </button>
               </div>
             </motion.div>
-          </div>
+          </div>,
+          document.body
         )}
       </AnimatePresence>
 
@@ -466,14 +476,21 @@ export default function WhatsApp({ token }: WhatsAppProps) {
 
             <div className={`flex justify-between items-start mb-6 transition-all ${isSelectionMode ? 'pl-8' : ''}`}>
               <div className="flex items-center gap-3">
-              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
-                session.status === 'connected' ? 'bg-emerald-100 text-emerald-600' : 'bg-gray-100 text-gray-400'
+              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-500 ${
+                session.status === 'connected' ? 'bg-emerald-100 text-emerald-600 shadow-lg shadow-emerald-500/10' : 'bg-slate-100 text-slate-400'
               }`}>
-                <Smartphone className="w-6 h-6" />
+                <Smartphone className={`w-7 h-7 ${session.status === 'connected' ? 'animate-pulse' : ''}`} />
               </div>
               <div>
-                <h3 className="font-bold text-gray-900">{session.name || session.number || 'New Session'}</h3>
-                <p className="text-xs text-gray-500">Agent: {session.agent_name}</p>
+                <h3 className="font-black text-slate-900 tracking-tight">{session.name || 'WhatsApp Session'}</h3>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <p className="text-xs font-bold text-slate-500">{session.number || 'Pending Connection'}</p>
+                  {session.status === 'connected' && <CheckCircle2 className="w-3 h-3 text-emerald-500" />}
+                </div>
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  <div className="w-1 h-1 rounded-full bg-slate-300" />
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Agent: {session.agent_name}</p>
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -513,7 +530,7 @@ export default function WhatsApp({ token }: WhatsAppProps) {
               onClick={() => handleConnect(session.id)}
               className="w-full py-4 bg-slate-900 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-xl shadow-slate-900/20 hover:bg-primary transition-all active:scale-[0.98]"
             >
-              <RefreshCw className="w-4 h-4" /> Initialize Connection
+              <X className="w-4 h-4" /> Initialize Connection
             </button>
           ) : (
             <div className="space-y-4">
@@ -630,13 +647,13 @@ export default function WhatsApp({ token }: WhatsAppProps) {
 
       {/* Social Connection Modal */}
       <AnimatePresence>
-        {isConnectingSocial && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        {isConnectingSocial && createPortal(
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl border border-white/20"
+              className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl border border-gray-100"
             >
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-2xl font-bold text-gray-900">Connect Account</h2>
@@ -710,7 +727,8 @@ export default function WhatsApp({ token }: WhatsAppProps) {
                 By connecting, you agree to our terms of service and allow the bot to access your messages.
               </p>
             </motion.div>
-          </div>
+          </div>,
+          document.body
         )}
       </AnimatePresence>
     </div>

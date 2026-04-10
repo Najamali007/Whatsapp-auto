@@ -29,7 +29,8 @@ import {
   ChevronDown,
   ChevronLeft,
   Sparkles,
-  RefreshCw
+  RefreshCw,
+  Layers
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch } from '../lib/api';
@@ -105,6 +106,7 @@ export default function Conversations({ token, initialConversationId, onConversa
   const [sessionName, setSessionName] = useState('');
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
+  const [selectedChannel, setSelectedChannel] = useState<string>('all');
   const [selectedConversation, setSelectedConversation] = useState<number | null>(null);
   const [activePlatform, setActivePlatform] = useState<'whatsapp' | 'facebook' | 'instagram'>('whatsapp');
   const [selectedConversations, setSelectedConversations] = useState<number[]>([]);
@@ -166,7 +168,8 @@ export default function Conversations({ token, initialConversationId, onConversa
 
   const fetchConversations = async () => {
     try {
-      const data = await apiFetch('/api/conversations');
+      const queryParams = selectedChannel !== 'all' ? `?sessionId=${selectedChannel}` : '';
+      const data = await apiFetch(`/api/conversations${queryParams}`);
       setConversations(data);
       
       // Handle initial conversation ID from prop
@@ -398,12 +401,15 @@ export default function Conversations({ token, initialConversationId, onConversa
   };
 
   useEffect(() => {
+    fetchConversations();
+  }, [selectedChannel]);
+
+  useEffect(() => {
     console.log('Connecting to socket...');
     socket.on('connect', () => console.log('Socket connected:', socket.id));
     socket.on('disconnect', () => console.log('Socket disconnected'));
     socket.on('connect_error', (err) => console.error('Socket connection error:', err));
 
-    fetchConversations();
     fetchContacts();
     fetchSessions();
     fetchAgents();
@@ -911,7 +917,7 @@ export default function Conversations({ token, initialConversationId, onConversa
     : [];
 
   return (
-    <div className="flex flex-col h-[calc(100vh-20px)] bg-[#F8F9FB] overflow-hidden rounded-3xl border border-gray-100 shadow-sm">
+    <div className="flex flex-col min-h-[600px] h-[calc(100vh-64px)] bg-[#F8F9FB] rounded-3xl border border-gray-100 shadow-sm">
       {/* Platform Tabs */}
       <div className="flex items-center gap-1 p-2 bg-white border-b border-gray-100 shrink-0">
         {[
@@ -1137,24 +1143,41 @@ export default function Conversations({ token, initialConversationId, onConversa
         {/* Chat List Column */}
         <div className={`w-full md:w-[320px] bg-white border-r border-gray-100 flex flex-col shrink-0 ${selectedConversation ? 'hidden md:flex' : 'flex'}`}>
           <div className="p-4 space-y-4">
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search"
-                  className="w-full bg-[#F0F2F5] border-none rounded-xl py-2.5 pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search"
+                    className="w-full bg-[#F0F2F5] border-none rounded-xl py-2.5 pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                <button 
+                  onClick={() => setIsAuditBatchMode(!isAuditBatchMode)}
+                  className={`p-2.5 rounded-xl transition-all ${isAuditBatchMode ? 'bg-purple-500 text-white' : 'bg-[#F0F2F5] text-gray-500 hover:bg-gray-200'}`}
+                  title="Batch Audit"
+                >
+                  <Zap className="w-4 h-4" />
+                </button>
               </div>
-              <button 
-                onClick={() => setIsAuditBatchMode(!isAuditBatchMode)}
-                className={`p-2.5 rounded-xl transition-all ${isAuditBatchMode ? 'bg-purple-500 text-white' : 'bg-[#F0F2F5] text-gray-500 hover:bg-gray-200'}`}
-                title="Batch Audit"
-              >
-                <Zap className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <Layers className="w-4 h-4 text-gray-400" />
+                <select 
+                  value={selectedChannel}
+                  onChange={(e) => setSelectedChannel(e.target.value)}
+                  className="flex-1 bg-[#F0F2F5] border-none rounded-xl py-2 px-3 text-xs font-bold text-gray-700 focus:ring-2 focus:ring-primary/20 outline-none"
+                >
+                  <option value="all">All Channels</option>
+                  {sessions.map(session => (
+                    <option key={session.id} value={session.id}>
+                      {session.name || session.number || `Channel ${session.id}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {isAuditBatchMode && (

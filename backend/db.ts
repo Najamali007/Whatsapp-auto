@@ -125,8 +125,8 @@ async function initDb() {
     console.log('Super admin created: ' + superAdminUsername);
   }
 
-  // Remove old webdo admin if it exists
-  await dbProxy('users').where({ username: 'webdosolutions@gmail.com' }).delete();
+  // Remove old ondigix admin if it exists
+  await dbProxy('users').where({ username: 'ondigixsolutions@gmail.com' }).delete();
 
   const hasAgents = await dbProxy.schema.hasTable('agents');
   if (!hasAgents) {
@@ -421,7 +421,7 @@ async function initDb() {
   if (!hasSettings) {
     await dbProxy.schema.createTable('settings', (table) => {
       table.increments('id').primary();
-      table.integer('user_id').unsigned().references('id').inTable('users').onDelete('CASCADE');
+      table.integer('user_id').unsigned().nullable().references('id').inTable('users').onDelete('CASCADE');
       table.string('provider').notNullable();
       table.string('api_key').notNullable();
       table.string('base_url');

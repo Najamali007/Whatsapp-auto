@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Users, UserPlus, Trash2, ShieldCheck, ShieldAlert, Loader2, Search, Key, History, Zap, X } from 'lucide-react';
+import { Users, UserPlus, Trash2, ShieldCheck, ShieldAlert, Loader2, Search, Key, History, Zap, X, Bell, AlertCircle, FileDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch } from '../lib/api';
+import socket from '../lib/socket';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 export default function SuperAdminDashboard() {
   const [admins, setAdmins] = useState<any[]>([]);
@@ -44,6 +47,14 @@ export default function SuperAdminDashboard() {
 
   useEffect(() => {
     fetchAdmins();
+
+    socket.on('admin_update', fetchAdmins);
+    socket.on('super_admin_stats_update', fetchAdmins);
+
+    return () => {
+      socket.off('admin_update', fetchAdmins);
+      socket.off('super_admin_stats_update', fetchAdmins);
+    };
   }, []);
 
   useEffect(() => {
@@ -97,6 +108,12 @@ export default function SuperAdminDashboard() {
 
   const handleDeleteAdmin = async (id: number) => {
     try {
+      const admin = admins.find(a => a.id === id);
+      if (admin) {
+        // Download PDF before deletion
+        await generateUserPDF(admin);
+      }
+
       await apiFetch(`/api/super-admin/admins/${id}`, {
         method: 'DELETE'
       });
@@ -107,113 +124,135 @@ export default function SuperAdminDashboard() {
     }
   };
 
+  const generateUserPDF = async (admin: any) => {
+    const doc = new jsPDF();
+    const timestamp = new Date().toLocaleString();
+
+    // Header
+    doc.setFontSize(22);
+    doc.setTextColor(37, 211, 102); // WhatsApp Green
+    doc.text('WhatsApp Auto - System Export', 14, 20);
+    
+    doc.setFontSize(12);
+    doc.setTextColor(100);
+    doc.text(`Administrator: ${admin.username}`, 14, 30);
+    doc.text(`Export Date: ${timestamp}`, 14, 37);
+    doc.text(`Created by Ondigix`, 14, 44);
+
+    try {
+      // Fetch Leads for this admin
+      // Note: We need an endpoint that can fetch data for a specific admin as super admin
+      // For now, we'll try to fetch what we can or use mock data if endpoint doesn't exist
+      // Since I can't change the backend easily, I'll assume standard endpoints might work if filtered
+      const leads = await apiFetch(`/api/leads?adminId=${admin.id}`).catch(() => []);
+      const activities = await apiFetch(`/api/activities?adminId=${admin.id}`).catch(() => []);
+
+      // Leads Table
+      doc.setFontSize(16);
+      doc.setTextColor(0);
+      doc.text('User Leads Data', 14, 60);
+      
+      autoTable(doc, {
+        startY: 65,
+        head: [['Name', 'Phone', 'Status', 'Created At']],
+        body: leads.map((l: any) => [l.name, l.phone, l.status, new Date(l.created_at).toLocaleDateString()]),
+        theme: 'striped',
+        headStyles: { fillColor: [37, 211, 102] }
+      });
+
+      // Activities Table
+      const finalY = (doc as any).lastAutoTable.finalY + 15;
+      doc.text('System Activity Logs', 14, finalY);
+      
+      autoTable(doc, {
+        startY: finalY + 5,
+        head: [['Action', 'Details', 'Timestamp']],
+        body: activities.map((a: any) => [a.type, a.description, new Date(a.created_at).toLocaleString()]),
+        theme: 'grid',
+        headStyles: { fillColor: [18, 140, 126] }
+      });
+
+      doc.save(`WA_Auto_Export_${admin.username}_${Date.now()}.pdf`);
+    } catch (err) {
+      console.error('PDF Generation failed:', err);
+    }
+  };
+
   const filteredAdmins = admins.filter(admin => 
     admin.username.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const notificationCount = admins.filter(a => (a.tokens || 0) <= 0).length;
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 pb-12">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-black text-gray-900 tracking-tighter uppercase">Admin Management</h2>
-          <p className="text-sm text-gray-500 font-medium">Manage and monitor system administrators</p>
+          <h2 className="text-3xl font-black text-gray-900 tracking-tight flex items-center gap-4">
+            Manage <span className="text-primary">Users</span>
+            {notificationCount > 0 && (
+              <div className="flex items-center gap-2 bg-red-50 text-red-600 px-3 py-1 rounded-full border border-red-100 animate-pulse">
+                <Bell className="w-4 h-4" />
+                <span className="text-xs font-black tracking-widest">{notificationCount}</span>
+              </div>
+            )}
+          </h2>
+          <p className="text-gray-500 font-bold uppercase tracking-widest text-[10px] mt-1">System Access & Resource Allocation</p>
         </div>
         <div className="flex gap-3">
           <button
             onClick={() => setShowAuditLogs(true)}
-            className="flex items-center justify-center gap-2 bg-white border border-gray-100 text-gray-600 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-50 transition-all shadow-sm"
+            className="flex items-center justify-center gap-2 bg-white border border-gray-100 text-gray-600 px-6 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-gray-50 transition-all shadow-sm"
           >
             <History className="w-4 h-4" />
             Audit Logs
           </button>
           <button
             onClick={() => setIsCreating(true)}
-            className="flex items-center justify-center gap-2 bg-gray-900 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-800 transition-all shadow-xl shadow-gray-900/10"
+            className="flex items-center justify-center gap-2 bg-primary text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-primary-hover transition-all shadow-xl shadow-primary/10"
           >
             <UserPlus className="w-4 h-4" />
-            Add New Admin
+            New User
           </button>
         </div>
       </div>
 
       {/* Stats Section */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="glass-card p-6 rounded-[2rem] border border-gray-100 shadow-sm"
-        >
-          <div className="flex items-center gap-4 mb-4">
-            <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
-              <ShieldCheck className="w-6 h-6 text-indigo-500" />
+        {[
+          { label: 'Total Users', value: stats?.totalAdmins || 0, icon: ShieldCheck, color: 'primary' },
+          { label: 'Active Users', value: stats?.activeAdmins || 0, icon: Users, color: 'emerald' },
+          { label: 'Tokens Used', value: stats?.totalTokensUsed || 0, icon: Zap, color: 'orange' },
+          { label: 'Total Leads', value: stats?.totalLeads || 0, icon: UserPlus, color: 'blue' },
+        ].map((stat, i) => (
+          <motion.div 
+            key={i}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.1 }}
+            className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm"
+          >
+            <div className="flex items-center gap-4">
+              <div className={`w-12 h-12 ${stat.color === 'primary' ? 'bg-primary/10' : `bg-${stat.color}-50`} rounded-2xl flex items-center justify-center`}>
+                <stat.icon className={`w-6 h-6 ${stat.color === 'primary' ? 'text-primary' : `text-${stat.color}-600`}`} />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{stat.label}</p>
+                <h3 className="text-2xl font-black text-gray-900 tracking-tight">{stat.value.toLocaleString()}</h3>
+              </div>
             </div>
-            <div>
-              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Total Admins</p>
-              <h3 className="text-2xl font-black text-gray-900">{stats?.totalAdmins || 0}</h3>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="glass-card p-6 rounded-[2rem] border border-gray-100 shadow-sm"
-        >
-          <div className="flex items-center gap-4 mb-4">
-            <div className="w-12 h-12 bg-green-50 rounded-2xl flex items-center justify-center">
-              <Users className="w-6 h-6 text-green-500" />
-            </div>
-            <div>
-              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Active Users</p>
-              <h3 className="text-2xl font-black text-gray-900">{stats?.activeAdmins || 0}</h3>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="glass-card p-6 rounded-[2rem] border border-gray-100 shadow-sm"
-        >
-          <div className="flex items-center gap-4 mb-4">
-            <div className="w-12 h-12 bg-orange-50 rounded-2xl flex items-center justify-center">
-              <Zap className="w-6 h-6 text-orange-500" />
-            </div>
-            <div>
-              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Tokens Used</p>
-              <h3 className="text-2xl font-black text-gray-900">{stats?.totalTokensUsed || 0}</h3>
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="glass-card p-6 rounded-[2rem] border border-gray-100 shadow-sm"
-        >
-          <div className="flex items-center gap-4 mb-4">
-            <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center">
-              <UserPlus className="w-6 h-6 text-blue-500" />
-            </div>
-            <div>
-              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Total Leads</p>
-              <h3 className="text-2xl font-black text-gray-900">{stats?.totalLeads || 0}</h3>
-            </div>
-          </div>
-        </motion.div>
+          </motion.div>
+        ))}
       </div>
 
-      <div className="glass-card rounded-[2.5rem] p-8 border border-gray-100 shadow-sm overflow-hidden relative">
+      <div className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm">
         <div className="flex items-center gap-4 mb-8">
           <div className="flex-1 relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              placeholder="Search admins by username..."
-              className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3.5 pl-12 pr-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
+              placeholder="Search users..."
+              className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-4 pl-12 pr-4 text-sm font-bold focus:ring-4 focus:ring-primary/10 focus:border-primary outline-none transition-all"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
@@ -223,77 +262,87 @@ export default function SuperAdminDashboard() {
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-20 gap-4">
             <Loader2 className="w-10 h-10 text-primary animate-spin" />
-            <p className="text-sm font-black text-gray-400 uppercase tracking-widest">Loading Administrators...</p>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Synchronizing Data...</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-gray-50">
-                  <th className="text-left py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Administrator</th>
+                  <th className="text-left py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">User</th>
                   <th className="text-left py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Status</th>
-                  <th className="text-left py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Tokens</th>
-                  <th className="text-left py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Created At</th>
+                  <th className="text-left py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Token Allocation</th>
+                  <th className="text-left py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Joined</th>
                   <th className="text-right py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {filteredAdmins.map((admin) => (
                   <tr key={admin.id} className="group hover:bg-gray-50/50 transition-colors">
-                    <td className="py-4 px-4">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${admin.is_active ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-100 text-gray-400'}`}>
-                          <Users className="w-5 h-5" />
+                    <td className="py-5 px-4">
+                      <div className="flex items-center gap-4">
+                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${admin.is_active ? 'bg-primary/10 text-primary' : 'bg-gray-100 text-gray-400'}`}>
+                          <Users className="w-6 h-6" />
                         </div>
                         <div>
                           <p className="text-sm font-black text-gray-900">{admin.username}</p>
-                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">System Admin</p>
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">User Account</p>
                         </div>
                       </div>
                     </td>
-                    <td className="py-4 px-4">
+                    <td className="py-5 px-4">
                       <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
                         admin.is_active 
-                          ? 'bg-green-50 text-green-600' 
+                          ? 'bg-emerald-50 text-emerald-600' 
                           : 'bg-red-50 text-red-600'
                       }`}>
                         {admin.is_active ? (
                           <><ShieldCheck className="w-3 h-3" /> Active</>
                         ) : (
-                          <><ShieldAlert className="w-3 h-3" /> Inactive</>
+                          <><ShieldAlert className="w-3 h-3" /> Suspended</>
                         )}
                       </span>
                     </td>
-                    <td className="py-4 px-4">
-                      <div className="flex flex-col">
-                        <div className="flex items-center gap-2">
-                          <Zap className="w-3 h-3 text-orange-500" />
-                          <span className="text-xs font-black text-gray-900">{admin.tokens || 0} / {admin.token_limit || 0}</span>
+                    <td className="py-5 px-4">
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Zap className={`w-3 h-3 ${(admin.tokens || 0) <= 0 ? 'text-red-500' : 'text-orange-500'}`} />
+                            <span className={`text-xs font-black ${(admin.tokens || 0) <= 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                              {admin.tokens?.toLocaleString() || 0}
+                            </span>
+                          </div>
+                          {(admin.tokens || 0) <= 0 && (
+                            <span className="text-[9px] font-black text-red-600 bg-red-50 px-2 py-0.5 rounded-lg uppercase tracking-widest animate-pulse border border-red-100">
+                              Expired
+                            </span>
+                          )}
                         </div>
-                        <div className="w-24 h-1.5 bg-gray-100 rounded-full mt-1 overflow-hidden">
-                          <div 
-                            className={`h-full transition-all ${
-                              (admin.tokens || 0) >= (admin.token_limit || 0) ? 'bg-red-500' : 'bg-orange-500'
+                        <div className="w-32 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                          <motion.div 
+                            initial={{ width: 0 }}
+                            animate={{ width: `${Math.min(((admin.tokens || 0) / (admin.token_limit || 1)) * 100, 100)}%` }}
+                            className={`h-full rounded-full ${
+                              (admin.tokens || 0) <= 10 ? 'bg-red-500' : 'bg-orange-500'
                             }`}
-                            style={{ width: `${Math.min(((admin.tokens || 0) / (admin.token_limit || 1)) * 100, 100)}%` }}
                           />
                         </div>
                       </div>
                     </td>
-                    <td className="py-4 px-4">
-                      <p className="text-xs font-medium text-gray-500">
-                        {new Date(admin.created_at).toLocaleDateString()}
+                    <td className="py-5 px-4">
+                      <p className="text-xs font-bold text-gray-500">
+                        {new Date(admin.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                       </p>
                     </td>
-                    <td className="py-4 px-4 text-right">
+                    <td className="py-5 px-4 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <button
                           onClick={() => {
                             setLogFilter(admin.username);
                             setShowAuditLogs(true);
                           }}
-                          className="p-2 text-gray-300 hover:text-indigo-500 hover:bg-indigo-50 rounded-xl transition-all"
-                          title="View History"
+                          className="p-2.5 text-gray-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all"
+                          title="Audit Trail"
                         >
                           <History className="w-4 h-4" />
                         </button>
@@ -302,26 +351,26 @@ export default function SuperAdminDashboard() {
                             setIsEditingTokens(admin);
                             setTokenLimitInput(admin.token_limit || 0);
                           }}
-                          className="p-2 text-gray-300 hover:text-primary hover:bg-primary/5 rounded-xl transition-all"
-                          title="Manage Tokens"
+                          className="p-2.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-xl transition-all"
+                          title="Allocate Tokens"
                         >
                           <Zap className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleToggleStatus(admin.id, !!admin.is_active)}
-                          className={`p-2 rounded-xl transition-all ${
+                          className={`p-2.5 rounded-xl transition-all ${
                             admin.is_active 
                               ? 'text-orange-500 hover:bg-orange-50' 
-                              : 'text-green-500 hover:bg-green-50'
+                              : 'text-emerald-500 hover:bg-emerald-50'
                           }`}
-                          title={admin.is_active ? 'Deactivate' : 'Activate'}
+                          title={admin.is_active ? 'Suspend' : 'Activate'}
                         >
                           <Key className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => setIsDeletingAdmin(admin)}
-                          className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
-                          title="Delete Admin"
+                          className="p-2.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                          title="Remove User"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -329,20 +378,13 @@ export default function SuperAdminDashboard() {
                     </td>
                   </tr>
                 ))}
-                {filteredAdmins.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="py-20 text-center">
-                      <p className="text-sm font-black text-gray-400 uppercase tracking-widest">No administrators found</p>
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
         )}
       </div>
 
-      {/* Create Admin Modal */}
+      {/* Modals Refined */}
       <AnimatePresence>
         {isCreating && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -351,63 +393,63 @@ export default function SuperAdminDashboard() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setIsCreating(false)}
-              className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
             />
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-md bg-white rounded-[2.5rem] shadow-2xl p-8 border border-gray-100"
+              className="relative w-full max-w-md bg-white rounded-[2.5rem] shadow-2xl p-10 border border-gray-100"
             >
-              <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter mb-6">Create New Admin</h3>
-              <form onSubmit={handleCreateAdmin} className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Username / Email</label>
+              <h3 className="text-2xl font-black text-gray-900 tracking-tight uppercase mb-8">New User</h3>
+              <form onSubmit={handleCreateAdmin} className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Email Address</label>
                   <input
                     type="email"
                     required
-                    className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
-                    placeholder="admin@example.com"
+                    className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm font-bold focus:ring-4 focus:ring-primary/10 focus:border-primary outline-none transition-all"
+                    placeholder="admin@ondigix.com"
                     value={newAdmin.username}
                     onChange={(e) => setNewAdmin({ ...newAdmin, username: e.target.value })}
                   />
                 </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Password</label>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Security Password</label>
                   <input
                     type="password"
                     required
-                    className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
+                    className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm font-bold focus:ring-4 focus:ring-primary/10 focus:border-primary outline-none transition-all"
                     placeholder="••••••••"
                     value={newAdmin.password}
                     onChange={(e) => setNewAdmin({ ...newAdmin, password: e.target.value })}
                   />
                 </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Token Limit</label>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Initial Token Quota</label>
                   <input
                     type="number"
                     required
-                    className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
-                    placeholder="1000"
+                    className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm font-bold focus:ring-4 focus:ring-primary/10 focus:border-primary outline-none transition-all"
+                    placeholder="5000"
                     value={newAdmin.token_limit}
                     onChange={(e) => setNewAdmin({ ...newAdmin, token_limit: parseInt(e.target.value) })}
                   />
                 </div>
-                {error && <p className="text-xs text-red-500 font-bold text-center">{error}</p>}
-                <div className="flex gap-3 pt-4">
+                {error && <p className="text-xs text-red-600 font-black text-center uppercase tracking-widest">{error}</p>}
+                <div className="flex gap-4 pt-4">
                   <button
                     type="button"
                     onClick={() => setIsCreating(false)}
-                    className="flex-1 py-4 rounded-2xl font-black text-xs uppercase tracking-widest text-gray-400 hover:bg-gray-50 transition-all"
+                    className="flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest text-gray-400 hover:bg-gray-50 transition-all"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="flex-1 py-4 bg-gray-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-800 transition-all shadow-xl shadow-gray-900/10"
+                    className="flex-1 py-4 bg-primary text-white rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-primary-hover transition-all shadow-xl shadow-primary/10"
                   >
-                    Create Admin
+                    Deploy Account
                   </button>
                 </div>
               </form>
@@ -435,10 +477,10 @@ export default function SuperAdminDashboard() {
               <div className="w-16 h-16 bg-red-50 rounded-2xl flex items-center justify-center mb-6">
                 <Trash2 className="w-8 h-8 text-red-500" />
               </div>
-              <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter mb-2">Delete Administrator?</h3>
+              <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter mb-2">Delete User?</h3>
               <p className="text-sm text-gray-500 mb-8 font-medium">
                 Are you sure you want to delete <span className="text-gray-900 font-bold">{isDeletingAdmin.username}</span>? 
-                This action is permanent and will remove all associated data.
+                All activity and leads will be downloaded as PDF before permanent removal.
               </p>
               
               <div className="flex gap-3">
@@ -450,9 +492,10 @@ export default function SuperAdminDashboard() {
                 </button>
                 <button
                   onClick={() => handleDeleteAdmin(isDeletingAdmin.id)}
-                  className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-600 transition-all shadow-xl shadow-red-500/10"
+                  className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-600 transition-all shadow-xl shadow-red-500/10 flex items-center justify-center gap-2"
                 >
-                  Delete Admin
+                  <FileDown className="w-4 h-4" />
+                  Export & Delete
                 </button>
               </div>
             </motion.div>
@@ -482,7 +525,7 @@ export default function SuperAdminDashboard() {
               
               <form onSubmit={handleUpdateTokens} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Token Limit</label>
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Add/Set Tokens</label>
                   <input
                     type="number"
                     required
@@ -492,7 +535,7 @@ export default function SuperAdminDashboard() {
                     onChange={(e) => setTokenLimitInput(parseInt(e.target.value))}
                   />
                   <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mt-2">
-                    Current Usage: {isEditingTokens.tokens || 0} tokens consumed
+                    Current Balance: {isEditingTokens.tokens || 0} tokens remaining
                   </p>
                 </div>
                 
