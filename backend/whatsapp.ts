@@ -828,7 +828,7 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
       3. Strategic Goal: What is the single most important thing to say right now to provide value or move the conversation forward?
       4. Avoid Robotic Patterns: Do NOT use meta-commentary like "I saw you replied" or "I noticed your message". Humans don't say that.
       5. Single Message Constraint: Formulate the entire response into ONE clear, concise, and natural message.
-      6. Human Check: Does this sound like a helpful person at Ondigix Solutions, or a bot?
+      6. Human Check: Does this sound like a helpful person at OnDigix Solutions, or a bot?
       
       CONVERSATION RULES:
       - ${greetingInstruction}
@@ -859,7 +859,7 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
       "how can i assist you today",
       "i am here to help",
       "i saw your message",
-      "hi ondigix",
+      "hi whatsapp auto",
       "i saw you replied. how can i help?"
     ];
 

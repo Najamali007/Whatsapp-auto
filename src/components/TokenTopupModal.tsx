@@ -51,11 +51,11 @@ export default function TokenTopupModal({ isOpen, onClose }: TokenTopupModalProp
               </div>
               
               <button
-                onClick={() => window.open('https://wa.me/your_whatsapp_number', '_blank')}
+                onClick={() => window.open('https://wa.me/923064443434', '_blank')}
                 className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-800 transition-all shadow-xl shadow-gray-900/20 flex items-center justify-center gap-2"
               >
                 <MessageSquare className="w-4 h-4" />
-                Contact on WhatsApp
+                Contact on WhatsApp (+92 306 4443434)
               </button>
             </div>
           </motion.div>

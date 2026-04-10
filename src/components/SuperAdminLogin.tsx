@@ -56,10 +56,10 @@ export default function SuperAdminLogin({ onLogin }: SuperAdminLoginProps) {
             <Shield className="w-8 h-8 text-indigo-400" />
           </div>
           <h1 className="text-2xl font-black text-white uppercase tracking-tighter">
-            Ondigix
+            WhatsApp Auto
           </h1>
           <p className="text-indigo-400 text-[10px] font-black uppercase tracking-widest mt-1">
-            WhatsApp Auto Create by Ondigix
+            Created by OnDigix
           </p>
         </div>
 

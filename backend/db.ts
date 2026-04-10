@@ -539,7 +539,7 @@ async function initDb() {
     });
   }
 
-  console.log(`Database initialized successfully using ${isMySQL ? 'MySQL' : 'SQLite'} - Ondigix Branding`);
+  console.log(`Database initialized successfully using ${isMySQL ? 'MySQL' : 'SQLite'} - WhatsApp Auto Branding`);
 }
 
 // Helper to bridge better-sqlite3 style calls to knex (for minimal refactoring)

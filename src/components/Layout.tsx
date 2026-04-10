@@ -94,7 +94,7 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
       const newNotif: Notification = {
         id: Math.random().toString(36).substr(2, 9),
         title: 'Tokens Exhausted',
-        message: 'Your token balance has reached zero. Systems are paused.',
+        message: 'Your token balance has reached zero. Contact +92 306 4443434 for top-up.',
         type: 'tokens_exhausted',
         timestamp: new Date(),
         read: false
@@ -179,18 +179,19 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
                 }}
                 className="w-10 h-10 bg-whatsapp rounded-2xl flex items-center justify-center shadow-xl shadow-whatsapp/20 rotate-[-5deg] hover:rotate-0 transition-all duration-500 shrink-0 cursor-pointer active:scale-95"
               >
-                <span className="text-white font-black text-xl italic">WA</span>
+                <span className="text-white font-black text-lg italic">WA</span>
               </button>
               {isSidebarExpanded && (
                 <motion.div
-                  initial={{ opacity: 0, x: -10 }}
+                  initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.2, duration: 0.4 }}
                   className="flex-1 min-w-0"
                 >
                   <h1 className="text-lg font-black text-gray-900 tracking-tighter leading-none truncate">
                     WhatsApp Auto
                   </h1>
-                  <p className="text-[8px] font-black text-indigo-600 uppercase tracking-widest mt-1">Ondigix</p>
+                  <p className="text-[8px] font-black text-indigo-600 uppercase tracking-widest mt-1">Created by OnDigix</p>
                 </motion.div>
               )}
             </div>
@@ -205,10 +206,13 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
             )}
           </div>
 
-        <nav className={`flex-1 ${isSidebarExpanded ? 'px-3' : 'px-2'} space-y-2 overflow-hidden mt-4 transition-all duration-300`}>
-          {menuItems.map((item) => (
-            <button
+        <nav className={`flex-1 ${isSidebarExpanded ? 'px-3' : 'px-2'} space-y-2 overflow-y-auto overflow-x-hidden mt-4 transition-all duration-300 custom-scrollbar`}>
+          {menuItems.map((item, index) => (
+            <motion.button
               key={item.id}
+              initial={isSidebarExpanded ? { opacity: 0, x: -10 } : {}}
+              animate={isSidebarExpanded ? { opacity: 1, x: 0 } : {}}
+              transition={{ delay: 0.3 + (index * 0.05) }}
               onClick={() => {
                 setActiveTab(item.id);
                 setIsSidebarExpanded(true);
@@ -233,20 +237,24 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
                   {item.label}
                 </div>
               )}
-            </button>
+            </motion.button>
           ))}
         </nav>
 
         <div className={`${isSidebarExpanded ? 'p-4' : 'py-4 px-2'} space-y-6 transition-all duration-300`}>
-          <div className={`flex items-center ${isSidebarExpanded ? 'justify-between px-2' : 'justify-center'}`}>
+          <div 
+            onClick={() => !isSidebarExpanded && setIsSidebarExpanded(true)}
+            className={`flex items-center ${isSidebarExpanded ? 'justify-between px-2' : 'justify-center'} ${!isSidebarExpanded ? 'cursor-pointer hover:bg-gray-100 rounded-2xl p-1 transition-colors' : ''}`}
+          >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center border border-white shadow-sm shrink-0">
                 <UserCircle className="w-6 h-6 text-gray-400" />
               </div>
               {isSidebarExpanded && (
                 <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.5 }}
                   className="min-w-0"
                 >
                   <p className="text-xs font-black text-gray-900 truncate">{userRole === 'super_admin' ? 'Super Admin' : 'Admin'}</p>
@@ -256,7 +264,10 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
             </div>
             {isSidebarExpanded && (
               <button 
-                onClick={() => setShowLogoutConfirm(true)} 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowLogoutConfirm(true);
+                }} 
                 className="p-2.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
                 title="Logout"
               >

@@ -60,13 +60,13 @@ export default function Login({ onLogin }: LoginProps) {
       >
         <div className="text-center mb-8">
           <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <span className="text-primary font-black text-3xl italic">O</span>
+            <span className="text-primary font-black text-3xl italic">WA</span>
           </div>
           <h1 className="text-2xl font-black text-gray-900 uppercase tracking-tighter">
-            Ondigix
+            WhatsApp Auto
           </h1>
           <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest mt-1">
-            WhatsApp Auto Create by Ondigix
+            Created by OnDigix
           </p>
         </div>
 

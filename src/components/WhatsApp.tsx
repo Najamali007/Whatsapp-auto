@@ -484,7 +484,9 @@ export default function WhatsApp({ token }: WhatsAppProps) {
               <div>
                 <h3 className="font-black text-slate-900 tracking-tight">{session.name || 'WhatsApp Session'}</h3>
                 <div className="flex items-center gap-2 mt-0.5">
-                  <p className="text-xs font-bold text-slate-500">{session.number || 'Pending Connection'}</p>
+                  <p className="text-xs font-bold text-slate-500">
+                    {session.status === 'connected' ? 'Connected' : 'Pending Connection'}
+                  </p>
                   {session.status === 'connected' && <CheckCircle2 className="w-3 h-3 text-emerald-500" />}
                 </div>
                 <div className="flex items-center gap-1.5 mt-1.5">

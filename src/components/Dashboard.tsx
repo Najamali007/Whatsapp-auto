@@ -528,10 +528,12 @@ export default function Dashboard({ token }: DashboardProps) {
             
             <div className="space-y-3">
               <a 
-                href="mailto:whatsappauto@ondigix.com"
+                href="https://wa.me/923064443434"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="block w-full py-4 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-primary-hover transition-all shadow-xl shadow-primary/20"
               >
-                Contact Support Team
+                Contact Support Team (+92 306 4443434)
               </a>
               <button
                 onClick={() => setShowTokenEndedModal(false)}

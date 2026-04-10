@@ -137,7 +137,7 @@ export default function SuperAdminDashboard() {
     doc.setTextColor(100);
     doc.text(`Administrator: ${admin.username}`, 14, 30);
     doc.text(`Export Date: ${timestamp}`, 14, 37);
-    doc.text(`Created by Ondigix`, 14, 44);
+    doc.text(`Created by OnDigix`, 14, 44);
 
     try {
       // Fetch Leads for this admin
@@ -286,7 +286,9 @@ export default function SuperAdminDashboard() {
                         </div>
                         <div>
                           <p className="text-sm font-black text-gray-900">{admin.username}</p>
-                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">User Account</p>
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                            {(admin.tokens || 0) <= 0 ? 'Contact: +92 306 4443434' : 'User Account'}
+                          </p>
                         </div>
                       </div>
                     </td>

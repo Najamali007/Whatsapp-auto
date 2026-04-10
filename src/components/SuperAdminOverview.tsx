@@ -100,7 +100,7 @@ export default function SuperAdminOverview() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
           <h1 className="text-3xl font-black text-gray-900 tracking-tight">
-            System <span className="text-primary">Intelligence</span>
+            WhatsApp Auto <span className="text-primary">Intelligence</span>
           </h1>
           <p className="text-gray-500 font-bold uppercase tracking-widest text-[10px] mt-1">Global Infrastructure Monitoring</p>
         </div>
