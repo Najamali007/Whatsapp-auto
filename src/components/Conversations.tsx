@@ -218,11 +218,12 @@ export default function Conversations({ token, initialConversationId, onConversa
   const fetchSessions = async () => {
     try {
       const data = await apiFetch('/api/whatsapp/sessions');
+      // Sab sessions dikhao — connected, connecting, disconnected sab
+      setSessions(data);
       const connectedSessions = data.filter((s: any) => s.status === 'connected');
-      setSessions(connectedSessions);
       if (connectedSessions.length > 0 && !selectedSessionId) {
         setSelectedSessionId(connectedSessions[0].id);
-      } else if (connectedSessions.length === 0) {
+      } else if (data.length === 0) {
         setSelectedSessionId(null);
         setSelectedConversation(null);
       }
@@ -370,13 +371,32 @@ export default function Conversations({ token, initialConversationId, onConversa
     }
   };
 
-  const handleConnect = async (id: number) => {
+  const handleConnect = async (id: number, force: boolean = false) => {
     try {
-      await apiFetch(`/api/whatsapp/sessions/${id}/connect`, {
+      const data = await apiFetch(`/api/whatsapp/sessions/${id}/connect`, {
         method: 'POST',
+        body: JSON.stringify({ force }),
+        headers: { 'Content-Type': 'application/json' }
       });
+      if (data.qr) {
+        const qrDataUrl = await QRCode.toDataURL(data.qr);
+        setQrCodes(prev => ({ ...prev, [id]: qrDataUrl }));
+      }
+      fetchSessions();
     } catch (error) {
       console.error('Failed to connect');
+    }
+  };
+
+  const fetchQrCode = async (id: number) => {
+    try {
+      const data = await apiFetch(`/api/whatsapp/sessions/${id}/qr`);
+      if (data.qr) {
+        const qrDataUrl = await QRCode.toDataURL(data.qr);
+        setQrCodes(prev => ({ ...prev, [id]: qrDataUrl }));
+      }
+    } catch (error) {
+      console.error('Failed to fetch QR');
     }
   };
 
@@ -399,6 +419,12 @@ export default function Conversations({ token, initialConversationId, onConversa
       console.error('Failed to fetch messages');
     }
   };
+
+  useEffect(() => {
+    if (qrModalSessionId && !qrCodes[qrModalSessionId]) {
+      fetchQrCode(qrModalSessionId);
+    }
+  }, [qrModalSessionId]);
 
   useEffect(() => {
     fetchConversations();
@@ -501,15 +527,19 @@ export default function Conversations({ token, initialConversationId, onConversa
     });
 
     socket.on('qr', async ({ sessionId, qr }) => {
-      const qrDataUrl = await QRCode.toDataURL(qr);
-      setQrCodes(prev => ({ ...prev, [sessionId]: qrDataUrl }));
+      try {
+        const qrDataUrl = await QRCode.toDataURL(qr);
+        setQrCodes(prev => ({ ...prev, [sessionId]: qrDataUrl }));
+      } catch (e) {
+        console.error('QR conversion failed:', e);
+      }
     });
 
     socket.on('connection_status', ({ sessionId, status, number }) => {
       const sid = parseInt(sessionId);
-      if (status === 'connected') {
+      if (status === 'connected' || status === 'connecting') {
         fetchSessions();
-      } else {
+      } else if (status === 'disconnected') {
         // If it's disconnected, remove it from the Inbox view
         setSessions(prev => {
           const filtered = prev.filter(s => s.id !== sid);
@@ -553,6 +583,9 @@ export default function Conversations({ token, initialConversationId, onConversa
         }
         fetchConversations();
         fetchContacts();
+        if (selectedConversation) {
+          fetchMessages(selectedConversation);
+        }
       } else if (status === 'error') {
         setSyncingSessions(prev => {
           const newState = { ...prev };
@@ -576,6 +609,19 @@ export default function Conversations({ token, initialConversationId, onConversa
       }
     });
 
+    // WhatsApp.tsx se disconnect event listen karo
+    const handleWADisconnect = (e: any) => {
+      const sid = e.detail.sessionId;
+      setSessions(prev => prev.filter(s => s.id !== sid));
+      setConversations(prev => prev.filter(c => c.session_id !== sid));
+      setContacts(prev => prev.filter(c => c.session_id !== sid));
+      if (selectedSessionId === sid) {
+        setSelectedSessionId(null);
+        setSelectedConversation(null);
+      }
+    };
+    window.addEventListener('whatsapp_disconnected', handleWADisconnect);
+
     return () => {
       socket.off('new_message');
       socket.off('unread_reset');
@@ -585,6 +631,7 @@ export default function Conversations({ token, initialConversationId, onConversa
       socket.off('connect');
       socket.off('disconnect');
       socket.off('connect_error');
+      window.removeEventListener('whatsapp_disconnected', handleWADisconnect);
     };
   }, [selectedConversation]);
 
@@ -986,7 +1033,7 @@ export default function Conversations({ token, initialConversationId, onConversa
       </AnimatePresence>
 
       {/* Sessions Bar */}
-      <div className="flex items-center gap-2 p-4 bg-white border-b border-gray-100 overflow-x-auto scrollbar-hide shrink-0">
+      <div className="flex items-center gap-2 p-4 bg-white border-b border-gray-100 overflow-x-auto overflow-y-hidden scrollbar-hide shrink-0">
         <div className="flex items-center gap-2 flex-1">
           {sessions.map(session => (
             <div key={session.id} className="relative group flex items-center">
@@ -1031,7 +1078,7 @@ export default function Conversations({ token, initialConversationId, onConversa
               >
                 <div className={`w-2 h-2 rounded-full ${session.status === 'connected' ? 'bg-[#00C853]' : 'bg-gray-300'}`} />
                 {session.name || session.number || 'WhatsApp'}
-                {session.status !== 'connected' && (
+                {session.status === 'disconnected' && (
                   <span 
                     onClick={(e) => {
                       e.stopPropagation();
@@ -1041,6 +1088,17 @@ export default function Conversations({ token, initialConversationId, onConversa
                     className="ml-1 text-[10px] bg-primary text-white px-2 py-0.5 rounded-lg"
                   >
                     Connect
+                  </span>
+                )}
+                {session.status === 'connecting' && (
+                  <span 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setQrModalSessionId(session.id);
+                    }}
+                    className="ml-1 text-[10px] bg-orange-500 text-white px-2 py-0.5 rounded-lg animate-pulse"
+                  >
+                    Connecting...
                   </span>
                 )}
                 {session.status === 'connected' && (
@@ -1204,7 +1262,7 @@ export default function Conversations({ token, initialConversationId, onConversa
             )}
           </div>
 
-          <div className="flex-1 overflow-auto">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden">
             {filteredConversations.length > 0 ? (
               filteredConversations.map((conv) => (
                 <div key={conv.id} className="relative group">
@@ -1347,7 +1405,7 @@ export default function Conversations({ token, initialConversationId, onConversa
                       {currentConv?.contact_name || 'Unknown'}
                     </h3>
                     <p className="text-[10px] text-gray-400 font-medium">
-                      {currentConv?.contact_number.split('@')[0]}
+                      {(currentConv?.contact_number || '').replace('@s.whatsapp.net','').replace('@g.us','')}
                     </p>
                   </div>
                 </div>
@@ -1389,7 +1447,7 @@ export default function Conversations({ token, initialConversationId, onConversa
               </div>
 
               {/* Messages Area */}
-              <div className="flex-1 overflow-auto p-6 space-y-6 bg-whatsapp-pattern scroll-smooth">
+              <div className="flex-1 overflow-y-auto overflow-x-hidden p-6 space-y-6 bg-whatsapp-pattern scroll-smooth">
                 <div className="flex justify-center">
                   <span className="px-3 py-1 bg-white/80 backdrop-blur-sm border border-white/40 rounded-full text-[10px] font-bold text-gray-400 uppercase tracking-widest shadow-sm">
                     Yesterday
@@ -1566,7 +1624,7 @@ export default function Conversations({ token, initialConversationId, onConversa
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               className="absolute lg:relative right-0 top-0 bottom-0 z-30 lg:z-0 border-l border-gray-100 flex flex-col shrink-0 bg-white shadow-2xl lg:shadow-none overflow-hidden"
             >
-              <div className="w-[300px] h-full p-6 space-y-8 relative flex flex-col overflow-y-auto">
+              <div className="w-[300px] h-full p-6 space-y-8 relative flex flex-col overflow-y-auto overflow-x-hidden">
                 {/* Close Button */}
                 <button 
                   onClick={() => setShowRightSidebar(false)}
@@ -1816,13 +1874,21 @@ export default function Conversations({ token, initialConversationId, onConversa
                     </div>
                   </div>
                 ) : qrCodes[qrModalSessionId] ? (
-                  <motion.img 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    src={qrCodes[qrModalSessionId]} 
-                    alt="WhatsApp QR Code" 
-                    className="w-full max-w-[200px] shadow-sm rounded-xl"
-                  />
+                  <div className="flex flex-col items-center gap-4">
+                    <motion.img 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      src={qrCodes[qrModalSessionId]} 
+                      alt="WhatsApp QR Code" 
+                      className="w-full max-w-[200px] shadow-sm rounded-xl"
+                    />
+                    <button 
+                      onClick={() => handleConnect(qrModalSessionId, true)}
+                      className="text-[10px] font-bold text-primary uppercase tracking-widest hover:underline"
+                    >
+                      Refresh QR Code
+                    </button>
+                  </div>
                 ) : (
                   <div className="flex flex-col items-center gap-4">
                     <Loader2 className="w-10 h-10 animate-spin text-primary" />

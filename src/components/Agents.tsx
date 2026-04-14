@@ -1,9 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Plus, Trash2, Edit2, Check, X, Loader2, BrainCircuit, Upload, History, FileText, AlertCircle, Layers, User, Zap, Sparkles, Target, RefreshCw, MessageSquare, LayoutDashboard } from 'lucide-react';
+import { Users, Plus, Trash2, Edit2, Check, X, Loader2, BrainCircuit, Upload, FileText, AlertCircle, Layers, User, Zap, Sparkles, Target, RefreshCw, MessageSquare, LayoutDashboard, Settings2, ChevronDown, ChevronUp, Tag, DollarSign, HelpCircle, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch } from '../lib/api';
 import { loadingManager } from '../lib/loading';
 import AgentGuide from './AgentGuide';
+
+interface Service {
+  id: string;
+  name: string;
+  keywords: string[];
+  ask_for: string;
+  pricing: 'allowed' | 'not_allowed';
+  price_details?: string;
+  custom_reply?: string;
+}
+
+interface AgentConfig {
+  greeting_message: string;
+  fallback_message: string;
+  no_pricing_message: string;
+  services: Service[];
+}
 
 interface Agent {
   id: number;
@@ -19,6 +36,7 @@ interface Agent {
   others: string;
   avatar: string;
   strategy: string;
+  agent_config?: string;
   is_active: number;
 }
 
@@ -34,34 +52,41 @@ interface AgentsProps {
   onNavigate?: (tab: string) => void;
 }
 
+const defaultConfig: AgentConfig = {
+  greeting_message: '',
+  fallback_message: "I'm sorry, I didn't quite understand. Could you please clarify?",
+  no_pricing_message: "Pricing depends on your requirements. We'll share a custom quote after analysis.",
+  services: [],
+};
+
 export default function Agents({ token, initialAgentId, onNavigate }: AgentsProps) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(initialAgentId || null);
-
-  useEffect(() => {
-    if (initialAgentId !== undefined) {
-      setSelectedAgentId(initialAgentId);
-    }
-  }, [initialAgentId]);
-  const [activeSubTab, setActiveSubTab] = useState<'agents' | 'knowledge' | 'strategies' | 'guide'>('agents');
+  const [activeSubTab, setActiveSubTab] = useState<'agents' | 'services' | 'knowledge' | 'guide'>('agents');
   const [isTraining, setIsTraining] = useState<number | null>(null);
   const [trainingFiles, setTrainingFiles] = useState<TrainingFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
-  const [selectedAgents, setSelectedAgents] = useState<number[]>([]);
-  const [isDeletingBulk, setIsDeletingBulk] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [activeTrainTab, setActiveTrainTab] = useState<'chat' | 'document' | null>(null);
   const [hasApiKeys, setHasApiKeys] = useState<boolean>(true);
+  const [saveSuccess, setSaveSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
+  // Agent Config (Services Builder)
+  const [agentConfig, setAgentConfig] = useState<AgentConfig>(defaultConfig);
+  const [expandedService, setExpandedService] = useState<string | null>(null);
 
   const [formData, setFormData] = useState<Partial<Agent>>({
     name: '',
     personality: '',
     role: '',
     knowledge_base: '',
-    brand_company: 'Own Digix',
+    brand_company: '',
     product_service: '',
     objective: '',
     tone: '',
@@ -71,6 +96,17 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
     strategy: '',
     is_active: 1,
   });
+
+  const AVATARS = [
+    'https://api.dicebear.com/7.x/bottts/svg?seed=1',
+    'https://api.dicebear.com/7.x/bottts/svg?seed=2',
+    'https://api.dicebear.com/7.x/bottts/svg?seed=3',
+    'https://api.dicebear.com/7.x/bottts/svg?seed=4',
+  ];
+
+  useEffect(() => {
+    if (initialAgentId !== undefined) setSelectedAgentId(initialAgentId);
+  }, [initialAgentId]);
 
   const fetchAgents = async () => {
     try {
@@ -82,8 +118,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
       setHasApiKeys(settingsCheck.hasApiKeys);
       setError(null);
     } catch (error: any) {
-      console.error('Failed to fetch agents:', error);
-      setError(`Failed to load agents: ${error.message || 'Please check your connection.'}`);
+      setError(`Failed to load agents: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -93,185 +128,28 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
     try {
       const data = await apiFetch(`/api/agents/${agentId}/training-files`);
       setTrainingFiles(data);
-    } catch (error) {
-      console.error('Failed to fetch training files');
-    }
+    } catch (e) {}
   };
 
-  useEffect(() => {
-    fetchAgents();
-  }, []);
+  useEffect(() => { fetchAgents(); }, []);
 
   useEffect(() => {
-    if (selectedAgentId) {
-      fetchTrainingFiles(selectedAgentId);
-    } else {
-      setTrainingFiles([]);
-    }
+    if (selectedAgentId) fetchTrainingFiles(selectedAgentId);
+    else setTrainingFiles([]);
   }, [selectedAgentId]);
-
-  const validateForm = () => {
-    const errors: Record<string, string> = {};
-    if (!formData.name?.trim()) errors.name = 'Agent name is required';
-    if (!formData.brand_company?.trim()) errors.brand_company = 'Brand/Company is required';
-    if (!formData.product_service?.trim()) errors.product_service = 'Product/Service is required';
-    if (!formData.objective?.trim()) errors.objective = 'Objective is required';
-    setValidationErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  const handleSave = async (id?: number) => {
-    if (!validateForm()) return;
-
-    if (!hasApiKeys && !id) {
-      loadingManager.setError('Please add an API in settings before creating an agent.');
-      return;
-    }
-
-    const endpoint = id ? `/api/agents/${id}` : '/api/agents';
-    const method = id ? 'PUT' : 'POST';
-
-    try {
-      const response = await apiFetch(endpoint, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
-      });
-
-      if (!id && response.id) {
-        setSelectedAgentId(response.id);
-      }
-
-      fetchAgents();
-      setValidationErrors({});
-      alert('Changes saved successfully!');
-    } catch (error: any) {
-      console.error('Failed to save agent:', error);
-      setError(error.message || 'Failed to save agent');
-    }
-  };
-
-  const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this agent?')) return;
-
-    setDeletingId(id);
-    try {
-      await apiFetch(`/api/agents/${id}`, {
-        method: 'DELETE',
-      });
-      setSelectedAgents(prev => prev.filter(aid => aid !== id));
-      if (selectedAgentId === id) setSelectedAgentId(null);
-      fetchAgents();
-    } catch (error: any) {
-      console.error('Failed to delete agent:', error);
-      alert(`Failed to delete agent: ${error.message}`);
-    } finally {
-      setDeletingId(null);
-    }
-  };
-
-  const handleBulkDelete = async () => {
-    if (selectedAgents.length === 0) return;
-    if (!confirm(`Are you sure you want to delete ${selectedAgents.length} agents?`)) return;
-
-    setIsDeletingBulk(true);
-    try {
-      await apiFetch('/api/agents/bulk-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: selectedAgents }),
-      });
-      setSelectedAgents([]);
-      fetchAgents();
-    } catch (error: any) {
-      console.error('Failed to delete agents:', error);
-      alert(`Failed to delete agents: ${error.message}`);
-    } finally {
-      setIsDeletingBulk(false);
-    }
-  };
-
-  const toggleAgentSelection = (id: number) => {
-    setSelectedAgents(prev => 
-      prev.includes(id) ? prev.filter(aid => aid !== id) : [...prev, id]
-    );
-  };
-
-  const toggleSelectAll = () => {
-    if (selectedAgents.length === agents.length) {
-      setSelectedAgents([]);
-    } else {
-      setSelectedAgents(agents.map(a => a.id));
-    }
-  };
-
-  const handleFileUpload = async (agentId: number, e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsUploading(true);
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-      // Use standard fetch for FormData since apiFetch expects JSON by default
-      const response = await fetch(`/api/agents/${agentId}/train-file`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        body: formData,
-      });
-
-      if (response.ok) {
-        fetchTrainingFiles(agentId);
-      } else if (response.status === 401 || response.status === 403) {
-        localStorage.removeItem('token');
-        window.location.reload();
-      }
-    } catch (error) {
-      console.error('Upload failed');
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
-
-  const handleTrainHistory = async (agentId: number) => {
-    setIsUploading(true);
-    try {
-      await apiFetch(`/api/agents/${agentId}/train-history`, {
-        method: 'POST',
-      });
-      fetchTrainingFiles(agentId);
-    } catch (error) {
-      console.error('History training failed');
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  const handleDeleteFile = async (agentId: number, fileId: number) => {
-    try {
-      await apiFetch(`/api/agents/${agentId}/training-files/${fileId}`, {
-        method: 'DELETE',
-      });
-      fetchTrainingFiles(agentId);
-    } catch (error) {
-      console.error('Delete file failed');
-    }
-  };
-
-  const AVATARS = [
-    'https://api.dicebear.com/7.x/bottts/svg?seed=1',
-    'https://api.dicebear.com/7.x/bottts/svg?seed=2',
-    'https://api.dicebear.com/7.x/bottts/svg?seed=3',
-    'https://api.dicebear.com/7.x/bottts/svg?seed=4',
-  ];
 
   const selectedAgent = agents.find(a => a.id === selectedAgentId);
 
   useEffect(() => {
     if (selectedAgent) {
       setFormData(selectedAgent);
+      // Load config
+      try {
+        const cfg = selectedAgent.agent_config ? JSON.parse(selectedAgent.agent_config) : defaultConfig;
+        setAgentConfig({ ...defaultConfig, ...cfg });
+      } catch {
+        setAgentConfig(defaultConfig);
+      }
     } else {
       setFormData({
         name: '',
@@ -288,617 +166,623 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
         strategy: '',
         is_active: 1,
       });
+      setAgentConfig(defaultConfig);
     }
   }, [selectedAgentId, agents]);
 
-  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const validateForm = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.name?.trim()) errors.name = 'Agent name is required';
+    if (!formData.brand_company?.trim()) errors.brand_company = 'Brand/Company is required';
+    if (!formData.objective?.trim()) errors.objective = 'Objective is required';
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleSave = async (id?: number) => {
+    if (!validateForm()) return;
+    if (!hasApiKeys && !id) {
+      loadingManager.setError('Please add an API key in Settings first.');
+      return;
+    }
+    const endpoint = id ? `/api/agents/${id}` : '/api/agents';
+    const method = id ? 'PUT' : 'POST';
+    try {
+      const payload = { ...formData, agent_config: JSON.stringify(agentConfig) };
+      const response = await apiFetch(endpoint, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!id && response.id) setSelectedAgentId(response.id);
+      fetchAgents();
+      setValidationErrors({});
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (error: any) {
+      setError(error.message || 'Failed to save agent');
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    if (!confirm('Delete this agent?')) return;
+    setDeletingId(id);
+    try {
+      await apiFetch(`/api/agents/${id}`, { method: 'DELETE' });
+      if (selectedAgentId === id) setSelectedAgentId(null);
+      fetchAgents();
+    } catch (e: any) { alert(e.message); }
+    finally { setDeletingId(null); }
+  };
+
+  const handleFileUpload = async (agentId: number, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploading(true);
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const response = await fetch(`/api/agents/${agentId}/train-file`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: fd,
+      });
+      if (response.ok) {
+        fetchTrainingFiles(agentId);
+        setUploadSuccess(true);
+        setTimeout(() => setUploadSuccess(false), 3000);
+      }
+    } catch (e) {}
+    finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleDeleteFile = async (agentId: number, fileId: number) => {
+    try {
+      await apiFetch(`/api/agents/${agentId}/training-files/${fileId}`, { method: 'DELETE' });
+      fetchTrainingFiles(agentId);
+    } catch (e) {}
+  };
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !selectedAgentId) return;
-
-    const formData = new FormData();
-    formData.append('avatar', file);
-
+    const fd = new FormData();
+    fd.append('avatar', file);
     try {
       const response = await fetch(`/api/agents/${selectedAgentId}/avatar`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        body: formData,
+        body: fd,
       });
-
       if (response.ok) {
         const data = await response.json();
         setFormData(prev => ({ ...prev, avatar: data.avatarUrl }));
         fetchAgents();
       }
-    } catch (error) {
-      console.error('Avatar upload failed');
-    }
+    } catch (e) {}
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    );
-  }
+  // ── Services Builder helpers ──────────────────────────────
+  const addService = () => {
+    const id = `svc_${Date.now()}`;
+    const newSvc: Service = { id, name: '', keywords: [], ask_for: '', pricing: 'not_allowed', price_details: '', custom_reply: '' };
+    setAgentConfig(prev => ({ ...prev, services: [...prev.services, newSvc] }));
+    setExpandedService(id);
+  };
 
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 text-center space-y-4">
-        <AlertCircle className="w-12 h-12 text-red-500" />
-        <p className="text-gray-900 font-bold">{error}</p>
-        <button 
-          onClick={fetchAgents}
-          className="bg-primary text-white px-6 py-2 rounded-xl text-sm font-bold"
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
+  const updateService = (id: string, field: keyof Service, value: any) => {
+    setAgentConfig(prev => ({
+      ...prev,
+      services: prev.services.map(s => s.id === id ? { ...s, [field]: value } : s)
+    }));
+  };
+
+  const removeService = (id: string) => {
+    setAgentConfig(prev => ({ ...prev, services: prev.services.filter(s => s.id !== id) }));
+  };
+
+  const addKeyword = (serviceId: string, keyword: string) => {
+    if (!keyword.trim()) return;
+    setAgentConfig(prev => ({
+      ...prev,
+      services: prev.services.map(s => s.id === serviceId
+        ? { ...s, keywords: [...s.keywords.filter(k => k !== keyword.trim()), keyword.trim()] }
+        : s
+      )
+    }));
+  };
+
+  const removeKeyword = (serviceId: string, keyword: string) => {
+    setAgentConfig(prev => ({
+      ...prev,
+      services: prev.services.map(s => s.id === serviceId
+        ? { ...s, keywords: s.keywords.filter(k => k !== keyword) }
+        : s
+      )
+    }));
+  };
+
+  if (isLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
 
   return (
     <div className="min-h-[600px] flex flex-col relative">
       {/* Top Navigation */}
       <div className="flex items-center px-8 border-b border-gray-100 bg-white/80 backdrop-blur-md sticky top-0 z-20">
         <div className="flex items-center gap-2 mr-6 pr-6 border-r border-gray-100">
-          <button
-            onClick={() => onNavigate?.('dashboard')}
-            className="p-2 text-gray-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all"
-            title="Back to Dashboard"
-          >
+          <button onClick={() => onNavigate?.('dashboard')} className="p-2 text-gray-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all" title="Dashboard">
             <LayoutDashboard className="w-5 h-5" />
           </button>
         </div>
-        <button
-          onClick={() => setActiveSubTab('agents')}
-          className={`px-6 py-4 text-sm font-black uppercase tracking-widest transition-all border-b-2 ${
-            activeSubTab === 'agents' ? 'border-primary text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'
-          }`}
-        >
-          Basic Info
-        </button>
-        <button
-          onClick={() => setActiveSubTab('knowledge')}
-          className={`px-6 py-4 text-sm font-black uppercase tracking-widest transition-all border-b-2 ${
-            activeSubTab === 'knowledge' ? 'border-primary text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'
-          }`}
-        >
-          Knowledge
-        </button>
-        <button
-          onClick={() => setActiveSubTab('strategies')}
-          className={`px-6 py-4 text-sm font-black uppercase tracking-widest transition-all border-b-2 ${
-            activeSubTab === 'strategies' ? 'border-primary text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'
-          }`}
-        >
-          Strategies
-        </button>
-        <button
-          onClick={() => setActiveSubTab('guide')}
-          className={`px-6 py-4 text-sm font-black uppercase tracking-widest transition-all border-b-2 ${
-            activeSubTab === 'guide' ? 'border-primary text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'
-          }`}
-        >
-          Guide
-        </button>
+        {[
+          { id: 'agents', label: 'Basic Info' },
+          { id: 'services', label: 'Services & Flow' },
+          { id: 'knowledge', label: 'Knowledge' },
+          { id: 'guide', label: 'Guide' },
+        ].map(tab => (
+          <button key={tab.id} onClick={() => setActiveSubTab(tab.id as any)}
+            className={`px-6 py-4 text-sm font-black uppercase tracking-widest transition-all border-b-2 ${activeSubTab === tab.id ? 'border-primary text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       <div className="flex-1 flex overflow-hidden relative z-10">
-        {/* Left Sidebar - Agent List */}
+        {/* Sidebar */}
         <div className={`w-full md:w-[220px] border-r border-gray-100 flex flex-col bg-white/50 backdrop-blur-sm shrink-0 ${selectedAgentId && activeSubTab === 'agents' ? 'hidden md:flex' : 'flex'}`}>
           <div className="flex-1 overflow-y-auto px-3 py-6 space-y-3">
-            {agents.map((agent) => (
-              <div
-                key={agent.id}
-                onClick={() => setSelectedAgentId(agent.id)}
-                className={`w-full p-3 rounded-2xl text-left transition-all group relative cursor-pointer border ${
-                  selectedAgentId === agent.id 
-                    ? 'bg-white border-primary/20 shadow-lg shadow-primary/5 ring-1 ring-primary/5' 
-                    : 'bg-transparent border-transparent hover:bg-white/80 hover:border-gray-100'
-                }`}
-              >
+            {agents.map(agent => (
+              <div key={agent.id} onClick={() => setSelectedAgentId(agent.id)}
+                className={`w-full p-3 rounded-2xl text-left transition-all group relative cursor-pointer border ${selectedAgentId === agent.id ? 'bg-white border-primary/20 shadow-lg ring-1 ring-primary/5' : 'bg-transparent border-transparent hover:bg-white/80 hover:border-gray-100'}`}>
                 <div className="flex items-center gap-3">
                   <div className="relative shrink-0">
-                    <img
-                      src={agent.avatar || AVATARS[0]}
-                      alt={agent.name}
-                      className="w-10 h-10 rounded-xl bg-gray-100 shadow-sm object-cover"
-                    />
-                    {agent.is_active === 1 && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-primary border-2 border-white rounded-full" />
-                    )}
+                    <img src={agent.avatar || AVATARS[0]} alt={agent.name} className="w-10 h-10 rounded-xl bg-gray-100 shadow-sm object-cover" />
+                    {agent.is_active === 1 && <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-primary border-2 border-white rounded-full" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <h4 className="font-bold text-gray-900 text-sm truncate">{agent.name}</h4>
-                    <p className="text-[10px] text-gray-400 truncate font-medium">
-                      {agent.role || 'AI Assistant'}
-                    </p>
+                    <p className="text-[10px] text-gray-400 truncate font-medium">{agent.brand_company || 'AI Assistant'}</p>
                   </div>
                 </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete(agent.id);
-                  }}
-                  className="absolute top-2 right-2 p-1.5 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
-                >
+                <button onClick={(e) => { e.stopPropagation(); handleDelete(agent.id); }}
+                  className="absolute top-2 right-2 p-1.5 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all">
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             ))}
-            
             {agents.length === 0 && (
               <div className="text-center py-10 px-4">
-                <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-3 text-gray-400">
-                  <Users className="w-6 h-6" />
-                </div>
+                <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-3 text-gray-400"><Users className="w-6 h-6" /></div>
                 <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">No agents yet</p>
               </div>
             )}
           </div>
+          {/* Create New */}
+          <div className="p-3 border-t border-gray-100">
+            <button onClick={() => setSelectedAgentId(null)}
+              className="w-full py-3 bg-primary text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-primary/20">
+              <Plus className="w-4 h-4" /> New Agent
+            </button>
+          </div>
         </div>
 
-        {/* Main Area */}
-        <div className={`flex-1 overflow-y-auto ${!selectedAgentId && activeSubTab === 'agents' ? 'hidden md:block' : 'block'}`}>
-          {activeSubTab === 'agents' ? (
-            <div className="w-full p-6 md:p-12">
-              <div className="mb-12 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="px-3 py-1 bg-primary/10 rounded-full border border-primary/20">
-                      <span className="text-[10px] font-black text-primary uppercase tracking-widest">Intelligence Architect</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Active System</span>
-                    </div>
-                  </div>
-                  <h2 className="text-6xl font-black text-slate-900 mb-3 tracking-tighter leading-none">
-                    Agent Profile
-                  </h2>
-                  <p className="text-lg font-medium text-slate-400 max-w-2xl">
-                    Configure the core identity, cognitive capabilities, and behavioral patterns of your AI agent.
-                  </p>
-                </div>
-                <button 
-                  onClick={() => setSelectedAgentId(null)}
-                  className="md:hidden p-2 text-gray-400 hover:bg-gray-50 rounded-lg"
-                >
-                  <X className="w-6 h-6" />
-                </button>
+        {/* Main Content */}
+        <div className="flex-1 overflow-y-auto">
+
+          {/* ── BASIC INFO TAB ── */}
+          {activeSubTab === 'agents' && (
+            <div className="w-full p-6 md:p-10 max-w-3xl mx-auto">
+              <div className="mb-8">
+                <h2 className="text-3xl font-black text-slate-900 tracking-tight">Agent Profile</h2>
+                <p className="text-gray-400 text-sm mt-1">Define who your agent is and what business it represents.</p>
               </div>
 
-              <div className="flex flex-col gap-10">
-                {/* Basic Info Card */}
-                <div className="glass-card p-12 rounded-[3.5rem] relative overflow-hidden group">
-                  <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-primary/5 rounded-full -mr-64 -mt-64 blur-[100px] pointer-events-none group-hover:bg-primary/10 transition-all duration-1000" />
-                  <div className="absolute bottom-0 left-0 w-[300px] h-[300px] bg-purple-500/5 rounded-full -ml-32 -mb-32 blur-[80px] pointer-events-none" />
-                  
-                  {/* Name & Avatar */}
-                  <div className="flex flex-col gap-12">
-                    <div className="flex flex-col md:flex-row gap-12 items-start">
-                      <div className="w-full md:w-64 space-y-6">
-                        <label className="section-label">
-                          <User className="w-4 h-4" /> Agent Identity
-                        </label>
-                        <div className="relative group/avatar">
-                          <div className="w-full aspect-square rounded-[3rem] overflow-hidden bg-slate-50 border-2 border-dashed border-slate-200 flex items-center justify-center transition-all group-hover/avatar:border-primary/50 shadow-inner">
-                            <img 
-                              src={formData.avatar || AVATARS[0]} 
-                              alt="Preview" 
-                              className="w-full h-full object-cover transition-transform duration-700 group-hover/avatar:scale-110"
-                            />
-                            <div 
-                              onClick={() => avatarInputRef.current?.click()}
-                              className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover/avatar:opacity-100 transition-all flex flex-col items-center justify-center text-white cursor-pointer backdrop-blur-sm"
-                            >
-                              <Upload className="w-10 h-10 mb-2 animate-bounce" />
-                              <span className="text-[11px] font-black uppercase tracking-widest">Update Visuals</span>
-                            </div>
-                          </div>
-                          <input
-                            type="file"
-                            ref={avatarInputRef}
-                            className="hidden"
-                            onChange={handleAvatarUpload}
-                            accept="image/*"
-                          />
-                        </div>
-                        <div className="flex justify-center gap-2.5">
-                          {AVATARS.map((url, i) => (
-                            <button
-                              key={i}
-                              onClick={() => setFormData({ ...formData, avatar: url })}
-                              className={`w-9 h-9 rounded-xl overflow-hidden border-2 transition-all hover:scale-110 ${
-                                formData.avatar === url ? 'border-primary shadow-lg shadow-primary/20' : 'border-transparent opacity-40 hover:opacity-100'
-                              }`}
-                            >
-                              <img src={url} alt="" className="w-full h-full object-cover" />
-                            </button>
-                          ))}
+              <div className="space-y-6">
+                {/* Avatar + Name */}
+                <div className="bg-white border border-gray-100 p-8 rounded-3xl shadow-sm space-y-6">
+                  <div className="flex items-start gap-6">
+                    {/* Avatar */}
+                    <div className="shrink-0">
+                      <div className="relative group/av w-24 h-24 cursor-pointer" onClick={() => avatarInputRef.current?.click()}>
+                        <img src={formData.avatar || AVATARS[0]} className="w-24 h-24 rounded-2xl object-cover border-2 border-gray-100" />
+                        <div className="absolute inset-0 bg-black/40 rounded-2xl opacity-0 group-hover/av:opacity-100 transition-all flex items-center justify-center">
+                          <Upload className="w-6 h-6 text-white" />
                         </div>
                       </div>
-
-                      <div className="flex-1 w-full space-y-10">
-                        <div className="space-y-4">
-                          <label className="section-label">
-                            <Edit2 className="w-4 h-4" /> Intelligence Name <span className="text-red-500 ml-1">*Required</span>
-                          </label>
-                          <input
-                            type="text"
-                            placeholder="e.g. Sarah - Sales Expert"
-                            className={`advanced-input text-2xl ${validationErrors.name ? 'border-red-500 ring-4 ring-red-500/5' : ''}`}
-                            value={formData.name}
-                            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                          />
-                          {validationErrors.name && (
-                            <div className="flex items-center gap-2 text-red-500 px-2">
-                              <AlertCircle className="w-3.5 h-3.5" />
-                              <p className="text-[11px] font-bold uppercase tracking-wider">{validationErrors.name}</p>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="flex flex-col gap-10">
-                          <div className="space-y-4">
-                            <label className="section-label">
-                              <Users className="w-4 h-4" /> Brand / Organization <span className="text-red-500 ml-1">*Required</span>
-                            </label>
-                            <input
-                              type="text"
-                              placeholder="e.g. Geeksgenics Intelligence"
-                              className={`advanced-input ${validationErrors.brand_company ? 'border-red-500' : ''}`}
-                              value={formData.brand_company}
-                              onChange={(e) => setFormData({ ...formData, brand_company: e.target.value })}
-                            />
-                          </div>
-                          <div className="space-y-4">
-                            <label className="section-label">
-                              <Zap className="w-4 h-4" /> Core Product / Service <span className="text-red-500 ml-1">*Required</span>
-                            </label>
-                            <input
-                              type="text"
-                              placeholder="e.g. Premium SEO & Content Strategy"
-                              className={`advanced-input ${validationErrors.product_service ? 'border-red-500' : ''}`}
-                              value={formData.product_service}
-                              onChange={(e) => setFormData({ ...formData, product_service: e.target.value })}
-                            />
-                          </div>
-                        </div>
+                      <input type="file" ref={avatarInputRef} className="hidden" onChange={handleAvatarUpload} accept="image/*" />
+                      <div className="flex gap-1.5 mt-2">
+                        {AVATARS.map((url, i) => (
+                          <button key={i} onClick={() => setFormData({ ...formData, avatar: url })}
+                            className={`w-7 h-7 rounded-lg overflow-hidden border-2 transition-all ${formData.avatar === url ? 'border-primary' : 'border-transparent opacity-40 hover:opacity-100'}`}>
+                            <img src={url} className="w-full h-full object-cover" />
+                          </button>
+                        ))}
                       </div>
                     </div>
 
-                    <div className="h-px bg-slate-100/80" />
-
-                    {/* Role & Personality */}
-                    <div className="flex flex-col gap-12">
-                      <div className="space-y-4">
-                        <label className="section-label">
-                          <BrainCircuit className="w-4 h-4" /> Agent Role & Cognitive Expertise
-                        </label>
-                        <textarea
-                          placeholder="Define the specific role, expertise, and domain knowledge of this agent..."
-                          className="advanced-input h-56 resize-none leading-relaxed py-7"
-                          value={formData.role}
-                          onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                        />
+                    {/* Name + Company */}
+                    <div className="flex-1 space-y-4">
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Agent Name *</label>
+                        <input type="text" placeholder="e.g. Sara" value={formData.name || ''}
+                          className={`w-full bg-gray-50 border ${validationErrors.name ? 'border-red-400' : 'border-gray-200'} rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20`}
+                          onChange={e => setFormData({ ...formData, name: e.target.value })} />
+                        {validationErrors.name && <p className="text-[10px] text-red-500 font-bold mt-1">{validationErrors.name}</p>}
                       </div>
-                      <div className="space-y-4">
-                        <label className="section-label">
-                          <Sparkles className="w-4 h-4" /> Personality Matrix & Tone
-                        </label>
-                        <textarea
-                          placeholder="Describe the agent's personality traits, communication style, and emotional intelligence..."
-                          className="advanced-input h-56 resize-none leading-relaxed py-7"
-                          value={formData.personality}
-                          onChange={(e) => setFormData({ ...formData, personality: e.target.value })}
-                        />
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Business / Brand Name *</label>
+                        <input type="text" placeholder="e.g. Najm Ali SEO Services" value={formData.brand_company || ''}
+                          className={`w-full bg-gray-50 border ${validationErrors.brand_company ? 'border-red-400' : 'border-gray-200'} rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20`}
+                          onChange={e => setFormData({ ...formData, brand_company: e.target.value })} />
                       </div>
-                    </div>
-
-                    {/* Objective */}
-                    <div className="flex flex-col gap-12">
-                      <div className="space-y-4">
-                        <label className="section-label">
-                          <Target className="w-4 h-4" /> Primary Mission Objective <span className="text-red-500 ml-1">*Required</span>
-                        </label>
-                        <textarea
-                          placeholder="What is the ultimate goal this agent must achieve in every interaction?"
-                          className={`advanced-input h-56 resize-none leading-relaxed py-7 ${validationErrors.objective ? 'border-red-500' : ''}`}
-                          value={formData.objective}
-                          onChange={(e) => setFormData({ ...formData, objective: e.target.value })}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="pt-12 flex justify-end">
-                      <button
-                        onClick={() => handleSave(selectedAgentId || undefined)}
-                        className="group relative bg-slate-900 text-white px-16 py-6 rounded-[2rem] font-black uppercase tracking-[0.2em] text-xs shadow-2xl shadow-slate-900/20 hover:bg-primary active:scale-[0.98] transition-all duration-500 overflow-hidden"
-                      >
-                        <div className="absolute inset-0 bg-white/20 translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500" />
-                        <span className="relative flex items-center gap-3">
-                          {selectedAgentId ? <RefreshCw className="w-5 h-5 animate-spin-slow" /> : <X className="w-5 h-5" />}
-                          {selectedAgentId ? 'Update Intelligence' : 'Deploy Agent'}
-                        </span>
-                      </button>
                     </div>
                   </div>
+
+                  {/* Objective */}
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">What does this agent do? *</label>
+                    <textarea placeholder="e.g. Help clients with SEO, answer queries, share pricing and portfolios on request"
+                      value={formData.objective || ''} rows={3}
+                      className={`w-full bg-gray-50 border ${validationErrors.objective ? 'border-red-400' : 'border-gray-200'} rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20 resize-none`}
+                      onChange={e => setFormData({ ...formData, objective: e.target.value })} />
+                  </div>
+
+                  {/* Tone */}
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Tone / Personality</label>
+                    <div className="flex flex-wrap gap-2">
+                      {['Professional', 'Friendly', 'Formal', 'Casual', 'Persuasive', 'Supportive'].map(t => (
+                        <button key={t} onClick={() => setFormData({ ...formData, tone: t })}
+                          className={`px-4 py-2 rounded-xl text-xs font-black border transition-all ${formData.tone === t ? 'bg-primary text-white border-primary' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-primary/40'}`}>
+                          {t}
+                        </button>
+                      ))}
+                      <input type="text" placeholder="Custom tone..." value={!['Professional','Friendly','Formal','Casual','Persuasive','Supportive'].includes(formData.tone || '') ? formData.tone || '' : ''}
+                        className="px-4 py-2 rounded-xl text-xs font-bold bg-gray-50 border border-gray-200 outline-none focus:ring-2 focus:ring-primary/20 w-32"
+                        onChange={e => setFormData({ ...formData, tone: e.target.value })} />
+                    </div>
+                  </div>
+
+                  {/* Language */}
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Primary Language</label>
+                    <div className="flex gap-2">
+                      {['English', 'Urdu', 'Both'].map(l => (
+                        <button key={l} onClick={() => setFormData({ ...formData, others: l })}
+                          className={`px-4 py-2 rounded-xl text-xs font-black border transition-all ${formData.others === l ? 'bg-primary text-white border-primary' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-primary/40'}`}>
+                          {l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Save Button */}
+                <div className="flex justify-end">
+                  <button onClick={() => handleSave(selectedAgentId || undefined)}
+                    className={`px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl transition-all flex items-center gap-2 ${saveSuccess ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white hover:bg-primary'}`}>
+                    {saveSuccess ? <><Check className="w-4 h-4" /> Saved!</> : <>{selectedAgentId ? <RefreshCw className="w-4 h-4" /> : <Plus className="w-4 h-4" />}{selectedAgentId ? 'Update Agent' : 'Create Agent'}</>}
+                  </button>
                 </div>
               </div>
             </div>
-          ) : activeSubTab === 'knowledge' ? (
-            <div className="w-full p-6 md:p-12">
-              <div className="mb-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div className="flex items-center justify-between w-full md:w-auto">
-                  <div>
-                    <h2 className="text-3xl font-black text-gray-900 mb-1 tracking-tight">Knowledge Base</h2>
-                    <p className="text-sm font-medium text-gray-400">Train your agent with custom documents and history</p>
-                  </div>
-                  <button 
-                    onClick={() => setSelectedAgentId(null)}
-                    className="md:hidden p-2 text-gray-400 hover:bg-gray-50 rounded-lg"
-                  >
-                    <X className="w-6 h-6" />
-                  </button>
-                </div>
-                {selectedAgentId && (
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      onClick={() => handleTrainHistory(selectedAgentId)}
-                      disabled={isUploading}
-                      className="px-5 py-3 bg-white border border-gray-100 text-gray-600 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-gray-50 transition-all flex items-center gap-2 shadow-sm"
-                    >
-                      <History className="w-4 h-4" /> History
-                    </button>
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isUploading}
-                      className="px-5 py-3 bg-primary text-white rounded-2xl text-xs font-black uppercase tracking-widest shadow-xl shadow-primary/20 hover:bg-primary-hover transition-all flex items-center gap-2"
-                    >
-                      <Upload className="w-4 h-4" /> Upload
-                    </button>
-                    <input
-                      type="file"
-                      ref={fileInputRef}
-                      className="hidden"
-                      onChange={(e) => selectedAgentId && handleFileUpload(selectedAgentId, e)}
-                      accept=".txt,.pdf,.doc,.docx"
-                    />
-                  </div>
-                )}
+          )}
+
+          {/* ── SERVICES & FLOW TAB ── */}
+          {activeSubTab === 'services' && (
+            <div className="w-full p-6 md:p-10 max-w-3xl mx-auto">
+              <div className="mb-8">
+                <h2 className="text-3xl font-black text-slate-900 tracking-tight">Services & Flow</h2>
+                <p className="text-gray-400 text-sm mt-1">Define your services, keywords, pricing rules — no coding needed.</p>
               </div>
 
               {!selectedAgentId ? (
-                <div className="flex flex-col items-center justify-center h-80 text-center space-y-4 bg-white border border-gray-100 rounded-[2.5rem] shadow-sm">
-                  <div className="w-20 h-20 bg-gray-50 rounded-[2rem] flex items-center justify-center text-gray-300">
-                    <BrainCircuit className="w-10 h-10" />
-                  </div>
-                  <p className="text-gray-400 font-black uppercase tracking-widest text-xs">Select an agent to manage knowledge</p>
+                <div className="flex flex-col items-center justify-center h-60 bg-white border border-dashed border-gray-200 rounded-3xl text-center">
+                  <Settings2 className="w-10 h-10 text-gray-200 mb-3" />
+                  <p className="text-gray-400 font-black text-xs uppercase tracking-widest">Select an agent first</p>
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {trainingFiles.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-80 text-center space-y-4 bg-white border border-gray-100 rounded-[2.5rem] shadow-sm">
-                      <div className="w-20 h-20 bg-gray-50 rounded-[2rem] flex items-center justify-center text-gray-300">
-                        <FileText className="w-10 h-10" />
-                      </div>
-                      <p className="text-gray-400 font-black uppercase tracking-widest text-xs">No training files found</p>
+                  {/* Messages */}
+                  <div className="bg-white border border-gray-100 p-6 rounded-3xl shadow-sm space-y-5">
+                    <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest">Auto Messages</h3>
+                    <div>
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-2">Greeting Message (First Message)</label>
+                      <input type="text"
+                        placeholder={`e.g. Assalam o Alaikum! I'm ${formData.name || 'Sara'} from ${formData.brand_company || 'your company'}. How can I assist you today?`}
+                        value={agentConfig.greeting_message}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                        onChange={e => setAgentConfig(prev => ({ ...prev, greeting_message: e.target.value }))} />
+                      <p className="text-[10px] text-gray-400 mt-1">Leave empty to let AI generate naturally.</p>
                     </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {trainingFiles.map(file => (
-                        <div key={file.id} className="flex items-center justify-between bg-white border border-gray-100 p-5 rounded-2xl group shadow-sm hover:shadow-md transition-all">
-                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center text-primary">
-                              <FileText className="w-6 h-6" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-bold text-gray-900 truncate max-w-[180px]">{file.original_name}</p>
-                              <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider">{new Date(file.created_at).toLocaleDateString()}</p>
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => handleDeleteFile(selectedAgentId, file.id)}
-                            className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
+                    <div>
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-2">Fallback Message (When confused)</label>
+                      <input type="text"
+                        value={agentConfig.fallback_message}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                        onChange={e => setAgentConfig(prev => ({ ...prev, fallback_message: e.target.value }))} />
                     </div>
-                  )}
-                  {isUploading && (
-                    <div className="flex items-center justify-center gap-3 p-6 bg-primary/5 text-primary rounded-[2rem] animate-pulse border border-primary/10">
-                      <Loader2 className="w-6 h-6 animate-spin" />
-                      <span className="text-sm font-black uppercase tracking-widest">Processing Knowledge...</span>
+                    <div>
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-2">No Pricing Message</label>
+                      <input type="text"
+                        value={agentConfig.no_pricing_message}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                        onChange={e => setAgentConfig(prev => ({ ...prev, no_pricing_message: e.target.value }))} />
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : activeSubTab === 'strategies' ? (
-            <div className="w-full p-6 md:p-12">
-              <div className="mb-10 flex items-center justify-between">
-                <div>
-                  <h2 className="text-3xl font-black text-gray-900 mb-1 tracking-tight">Strategies</h2>
-                  <p className="text-sm font-medium text-gray-400">Configure advanced response strategies and workflows</p>
-                </div>
-                <button 
-                  onClick={() => setSelectedAgentId(null)}
-                  className="md:hidden p-2 text-gray-400 hover:bg-gray-50 rounded-lg"
-                >
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-              
-              {!selectedAgentId ? (
-                <div className="flex flex-col items-center justify-center h-80 text-center space-y-4 bg-white border border-gray-100 rounded-[2.5rem] shadow-sm">
-                  <div className="w-20 h-20 bg-gray-50 rounded-[2rem] flex items-center justify-center text-gray-300">
-                    <Layers className="w-10 h-10" />
                   </div>
-                  <p className="text-gray-400 font-black uppercase tracking-widest text-xs">Select an agent to manage strategies</p>
-                </div>
-              ) : (
-                <div className="space-y-8">
-                  <div className="bg-white border border-gray-100 p-8 rounded-[2.5rem] shadow-xl shadow-gray-200/50 space-y-6">
-                    <div className="space-y-3">
-                      <label className="text-xs font-black text-gray-400 uppercase tracking-[0.2em]">Response Strategy</label>
-                      <textarea
-                        placeholder="Define how your agent should handle different customer scenarios..."
-                        className="w-full bg-gray-50 border border-gray-100 rounded-2xl px-5 py-4 text-sm font-bold h-64 focus:ring-4 focus:ring-primary/10 focus:border-primary outline-none transition-all resize-none"
-                        value={formData.strategy || ''}
-                        onChange={(e) => setFormData({ ...formData, strategy: e.target.value })}
-                      />
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                        This strategy will guide the agent's decision-making process during conversations.
-                      </p>
-                    </div>
 
-                    <div className="pt-6 flex justify-end">
-                      <button
-                        onClick={() => handleSave(selectedAgentId)}
-                        className="bg-primary text-white px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-primary/20 hover:bg-primary-hover transition-all"
-                      >
-                        Save Strategy
+                  {/* Services */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest">Services ({agentConfig.services.length})</h3>
+                      <button onClick={addService}
+                        className="bg-primary text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest flex items-center gap-2 shadow-lg shadow-primary/20">
+                        <Plus className="w-3.5 h-3.5" /> Add Service
                       </button>
                     </div>
+
+                    {agentConfig.services.length === 0 && (
+                      <div className="flex flex-col items-center justify-center h-40 bg-gray-50 border border-dashed border-gray-200 rounded-3xl text-center">
+                        <Zap className="w-8 h-8 text-gray-200 mb-2" />
+                        <p className="text-gray-400 font-bold text-xs">No services yet — click "Add Service"</p>
+                      </div>
+                    )}
+
+                    {agentConfig.services.map((svc, idx) => (
+                      <div key={svc.id} className="bg-white border border-gray-100 rounded-2xl overflow-hidden shadow-sm">
+                        {/* Service Header */}
+                        <div className="flex items-center gap-3 p-4 cursor-pointer" onClick={() => setExpandedService(expandedService === svc.id ? null : svc.id)}>
+                          <div className="w-8 h-8 bg-primary/10 rounded-xl flex items-center justify-center text-primary font-black text-sm">{idx + 1}</div>
+                          <div className="flex-1">
+                            <p className="font-black text-gray-900 text-sm">{svc.name || 'Untitled Service'}</p>
+                            <p className="text-[10px] text-gray-400">
+                              {svc.keywords.length > 0 ? svc.keywords.slice(0, 3).join(', ') + (svc.keywords.length > 3 ? '...' : '') : 'No keywords yet'}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase ${svc.pricing === 'allowed' ? 'bg-emerald-100 text-emerald-600' : 'bg-gray-100 text-gray-400'}`}>
+                              {svc.pricing === 'allowed' ? '$ Pricing On' : 'No Pricing'}
+                            </span>
+                            <button onClick={e => { e.stopPropagation(); removeService(svc.id); }} className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                            {expandedService === svc.id ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                          </div>
+                        </div>
+
+                        {/* Service Body */}
+                        <AnimatePresence>
+                          {expandedService === svc.id && (
+                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                              className="border-t border-gray-100 p-4 space-y-4 bg-gray-50/50">
+                              
+                              {/* Service Name */}
+                              <div>
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5">Service Name</label>
+                                <input type="text" placeholder="e.g. SEO, Web Design, Backlinks"
+                                  value={svc.name}
+                                  className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                                  onChange={e => updateService(svc.id, 'name', e.target.value)} />
+                              </div>
+
+                              {/* Keywords */}
+                              <div>
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5">
+                                  <Tag className="w-3 h-3 inline mr-1" />Trigger Keywords
+                                </label>
+                                <div className="flex flex-wrap gap-2 mb-2">
+                                  {svc.keywords.map(kw => (
+                                    <span key={kw} className="flex items-center gap-1 bg-primary/10 text-primary px-3 py-1 rounded-full text-xs font-black">
+                                      {kw}
+                                      <button onClick={() => removeKeyword(svc.id, kw)} className="hover:text-red-500 ml-0.5"><X className="w-3 h-3" /></button>
+                                    </span>
+                                  ))}
+                                </div>
+                                <div className="flex gap-2">
+                                  <input type="text" placeholder="Type keyword + Enter" id={`kw_${svc.id}`}
+                                    className="flex-1 bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                                    onKeyDown={e => {
+                                      if (e.key === 'Enter') {
+                                        addKeyword(svc.id, (e.target as HTMLInputElement).value);
+                                        (e.target as HTMLInputElement).value = '';
+                                      }
+                                    }} />
+                                  <button onClick={() => {
+                                    const inp = document.getElementById(`kw_${svc.id}`) as HTMLInputElement;
+                                    if (inp) { addKeyword(svc.id, inp.value); inp.value = ''; }
+                                  }} className="px-3 py-2 bg-primary text-white rounded-xl text-xs font-black">Add</button>
+                                </div>
+                                <p className="text-[10px] text-gray-400 mt-1">If client message contains any of these words → this service is detected.</p>
+                              </div>
+
+                              {/* Ask For */}
+                              <div>
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5">
+                                  <HelpCircle className="w-3 h-3 inline mr-1" />Ask Client For (optional)
+                                </label>
+                                <select value={svc.ask_for}
+                                  className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                                  onChange={e => updateService(svc.id, 'ask_for', e.target.value)}>
+                                  <option value="">— Nothing (just reply) —</option>
+                                  <option value="website_url">Website URL</option>
+                                  <option value="phone_number">Phone Number</option>
+                                  <option value="email">Email Address</option>
+                                  <option value="budget">Budget</option>
+                                  <option value="requirement_details">Requirement Details</option>
+                                  <option value="business_name">Business Name</option>
+                                </select>
+                              </div>
+
+                              {/* Pricing Toggle */}
+                              <div className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-xl">
+                                <div className="flex items-center gap-2">
+                                  <DollarSign className="w-4 h-4 text-gray-400" />
+                                  <div>
+                                    <p className="text-sm font-black text-gray-800">Pricing Allowed?</p>
+                                    <p className="text-[10px] text-gray-400">Can agent share price for this service?</p>
+                                  </div>
+                                </div>
+                                <button onClick={() => updateService(svc.id, 'pricing', svc.pricing === 'allowed' ? 'not_allowed' : 'allowed')}
+                                  className={`w-12 h-6 rounded-full transition-all relative ${svc.pricing === 'allowed' ? 'bg-emerald-500' : 'bg-gray-200'}`}>
+                                  <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${svc.pricing === 'allowed' ? 'left-7' : 'left-1'}`} />
+                                </button>
+                              </div>
+
+                              {/* Price Details (if allowed) */}
+                              {svc.pricing === 'allowed' && (
+                                <div>
+                                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5">Price Details</label>
+                                  <textarea placeholder="e.g. Basic: $150/mo, Standard: $300/mo, Premium: $500/mo"
+                                    value={svc.price_details || ''} rows={2}
+                                    className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+                                    onChange={e => updateService(svc.id, 'price_details', e.target.value)} />
+                                </div>
+                              )}
+
+                              {/* Custom Reply */}
+                              <div>
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5">Custom Reply for this Service (optional)</label>
+                                <textarea placeholder="Leave empty to let AI reply naturally. Or write a fixed reply here."
+                                  value={svc.custom_reply || ''} rows={2}
+                                  className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+                                  onChange={e => updateService(svc.id, 'custom_reply', e.target.value)} />
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Save */}
+                  <div className="flex justify-end">
+                    <button onClick={() => handleSave(selectedAgentId)}
+                      className={`px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl transition-all flex items-center gap-2 ${saveSuccess ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white hover:bg-primary'}`}>
+                      {saveSuccess ? <><Check className="w-4 h-4" /> Saved!</> : <><RefreshCw className="w-4 h-4" /> Save Config</>}
+                    </button>
                   </div>
                 </div>
               )}
             </div>
-          ) : activeSubTab === 'guide' ? (
-            <div className="h-full overflow-hidden">
+          )}
+
+          {/* ── KNOWLEDGE TAB ── */}
+          {activeSubTab === 'knowledge' && (
+            <div className="w-full max-w-3xl mx-auto p-6 md:p-10">
               {!selectedAgentId ? (
-                <div className="flex flex-col items-center justify-center h-80 text-center space-y-4 bg-white border border-gray-100 rounded-[2.5rem] shadow-sm m-12">
-                  <div className="w-20 h-20 bg-gray-50 rounded-[2rem] flex items-center justify-center text-gray-300">
-                    <MessageSquare className="w-10 h-10" />
+                <div className="flex flex-col items-center justify-center h-80 bg-white border border-gray-100 rounded-3xl text-center">
+                  <BrainCircuit className="w-10 h-10 text-gray-200 mb-3" />
+                  <p className="text-gray-400 font-black uppercase tracking-widest text-xs">Select an agent first</p>
+                </div>
+              ) : activeTrainTab === null ? (
+                <div className="max-w-2xl mx-auto pt-8">
+                  <div className="text-center mb-10">
+                    <h2 className="text-3xl font-black text-gray-900 tracking-tight mb-2">How do you want to train?</h2>
+                    <p className="text-gray-400 font-medium">Both methods work together — use both for best results</p>
                   </div>
-                  <p className="text-gray-400 font-black uppercase tracking-widest text-xs">Select an agent to guide</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <button onClick={() => setActiveTrainTab('chat')}
+                      className="group p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-primary/40 hover:shadow-xl transition-all text-left">
+                      <div className="w-14 h-14 bg-primary/10 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-primary transition-all">
+                        <MessageSquare className="w-7 h-7 text-primary group-hover:text-white transition-all" />
+                      </div>
+                      <h3 className="text-xl font-black text-gray-900 mb-2">Train with Chat</h3>
+                      <p className="text-sm text-gray-500 leading-relaxed">Tell it pricing, FAQs, portfolios — it remembers permanently.</p>
+                      <div className="mt-5 flex items-center gap-2 text-primary font-black text-xs uppercase tracking-widest">Start Training →</div>
+                    </button>
+                    <button onClick={() => setActiveTrainTab('document')}
+                      className="group p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-purple-400/40 hover:shadow-xl transition-all text-left">
+                      <div className="w-14 h-14 bg-purple-50 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-purple-500 transition-all">
+                        <FileText className="w-7 h-7 text-purple-500 group-hover:text-white transition-all" />
+                      </div>
+                      <h3 className="text-xl font-black text-gray-900 mb-2">Train with Document</h3>
+                      <p className="text-sm text-gray-500 leading-relaxed">Upload PDF, Word, or text. Agent reads and extracts all knowledge.</p>
+                      <div className="mt-5 flex items-center gap-2 text-purple-500 font-black text-xs uppercase tracking-widest">Upload File →</div>
+                    </button>
+                  </div>
+                </div>
+              ) : activeTrainTab === 'chat' ? (
+                <div>
+                  <div className="flex items-center gap-3 mb-6">
+                    <button onClick={() => setActiveTrainTab(null)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-400"><X className="w-5 h-5" /></button>
+                    <h2 className="text-xl font-black text-gray-900">Train with Chat</h2>
+                  </div>
+                  <AgentGuide agentId={selectedAgentId} token={token} />
                 </div>
               ) : (
-                <AgentGuide agentId={selectedAgentId} token={token} />
+                <div>
+                  <div className="flex items-center gap-3 mb-6">
+                    <button onClick={() => setActiveTrainTab(null)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-400"><X className="w-5 h-5" /></button>
+                    <h2 className="text-xl font-black text-gray-900">Train with Document</h2>
+                  </div>
+                  <div className="max-w-2xl">
+                    <div onClick={() => fileInputRef.current?.click()}
+                      className="border-2 border-dashed border-gray-200 hover:border-primary/50 rounded-3xl p-12 flex flex-col items-center text-center cursor-pointer hover:bg-primary/5 transition-all group mb-6">
+                      <div className="w-16 h-16 bg-gray-50 group-hover:bg-primary/10 rounded-2xl flex items-center justify-center mb-4 transition-all">
+                        <Upload className="w-8 h-8 text-gray-300 group-hover:text-primary transition-all" />
+                      </div>
+                      <h3 className="text-lg font-black text-gray-700 mb-1">Drop your file here</h3>
+                      <p className="text-sm text-gray-400">PDF, DOC, DOCX, TXT supported</p>
+                      <input type="file" ref={fileInputRef} className="hidden"
+                        onChange={e => selectedAgentId && handleFileUpload(selectedAgentId, e)}
+                        accept=".txt,.pdf,.doc,.docx" />
+                    </div>
+                    {isUploading && (
+                      <div className="flex items-center gap-3 p-5 bg-primary/5 text-primary rounded-2xl border border-primary/10 mb-6 animate-pulse">
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span className="text-sm font-black uppercase tracking-widest">Reading & Storing Knowledge...</span>
+                      </div>
+                    )}
+                    {uploadSuccess && (
+                      <div className="flex items-center gap-3 p-5 bg-emerald-50 text-emerald-600 rounded-2xl border border-emerald-100 mb-6">
+                        <Check className="w-5 h-5" />
+                        <span className="text-sm font-black uppercase tracking-widest">Document processed & stored!</span>
+                      </div>
+                    )}
+                    {trainingFiles.length > 0 && (
+                      <div>
+                        <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Uploaded Documents</h3>
+                        <div className="space-y-3">
+                          {trainingFiles.map(file => (
+                            <div key={file.id} className="flex items-center justify-between bg-white border border-gray-100 p-4 rounded-2xl group shadow-sm">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-purple-50 rounded-xl flex items-center justify-center text-purple-500"><FileText className="w-5 h-5" /></div>
+                                <div>
+                                  <p className="text-sm font-bold text-gray-900 truncate max-w-[200px]">{file.original_name}</p>
+                                  <p className="text-[10px] font-bold text-gray-400 uppercase">{new Date(file.created_at).toLocaleDateString()}</p>
+                                </div>
+                              </div>
+                              <button onClick={() => handleDeleteFile(selectedAgentId!, file.id)}
+                                className="p-2 text-gray-200 hover:text-red-500 hover:bg-red-50 rounded-xl opacity-0 group-hover:opacity-100 transition-all">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
-          ) : null}
-        </div>
+          )}
 
-        {/* Right Area - Mobile Preview */}
-        <div className={`hidden xl:flex w-[360px] border-l border-gray-100 bg-white/30 backdrop-blur-sm flex-col items-center justify-start p-6 relative shrink-0 overflow-y-auto scrollbar-hide ${activeSubTab === 'guide' ? '!hidden' : ''}`}>
-          <div className="absolute top-6 right-6 text-right">
-            <p className="text-primary font-handwriting text-lg rotate-[-5deg] leading-tight">
-              Live Preview ⤵
-            </p>
-          </div>
-          
-          {/* Phone Frame */}
-          <div className="w-[240px] h-[500px] bg-gray-900 rounded-[2.8rem] p-3 shadow-2xl relative overflow-hidden ring-8 ring-gray-900/5 mt-10 shrink-0">
-            <div className="w-full h-full bg-white rounded-[2.2rem] overflow-hidden flex flex-col">
-              {/* Status Bar */}
-              <div className="h-6 bg-white flex justify-between items-center px-6 pt-1">
-                <span className="text-[9px] font-black">9:41</span>
-                <div className="flex gap-1">
-                  <div className="w-1 h-1 rounded-full bg-black/20" />
-                  <div className="w-1 h-1 rounded-full bg-black/20" />
-                  <div className="w-2 h-1 rounded-full bg-black/20" />
+          {/* ── GUIDE TAB ── */}
+          {activeSubTab === 'guide' && (
+            <div className="h-full overflow-hidden">
+              {!selectedAgentId ? (
+                <div className="flex flex-col items-center justify-center h-80 bg-white border border-gray-100 rounded-3xl m-12 text-center">
+                  <MessageSquare className="w-10 h-10 text-gray-200 mb-3" />
+                  <p className="text-gray-400 font-black uppercase tracking-widest text-xs">Select an agent to guide</p>
                 </div>
-              </div>
-
-              {/* Chat Header */}
-              <div className="p-3 border-b border-gray-50 flex items-center gap-3 bg-gray-50/50">
-                <div className="w-9 h-9 rounded-xl overflow-hidden bg-white shadow-sm border border-gray-100">
-                  <img src={formData.avatar || AVATARS[0]} className="w-full h-full object-cover" />
-                </div>
-                <div className="min-w-0">
-                  <h5 className="text-[13px] font-black text-gray-900 truncate">{formData.name || 'Agent'}</h5>
-                  <div className="flex items-center gap-1">
-                    <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                    <span className="text-[8px] text-primary font-black uppercase tracking-widest">Online</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Chat Messages */}
-              <div className="flex-1 p-4 space-y-4 overflow-y-auto bg-whatsapp-pattern">
-                <div className="bg-white p-4 rounded-[1.2rem] rounded-tl-none shadow-sm max-w-[92%] relative z-10 border border-gray-50">
-                  <p className="text-[14px] text-gray-800 leading-snug font-bold">
-                    Hello! I'm {formData.name || 'your AI assistant'}. How can I help you today?
-                  </p>
-                </div>
-                <div className="bg-primary/10 p-4 rounded-[1.2rem] rounded-tr-none shadow-sm max-w-[92%] ml-auto relative z-10 border border-primary/5">
-                  <p className="text-[14px] text-primary font-black leading-snug">
-                    I'm interested in your {formData.product_service || 'services'}.
-                  </p>
-                </div>
-                <div className="bg-white p-4 rounded-[1.2rem] rounded-tl-none shadow-sm max-w-[92%] relative z-10 border border-gray-50">
-                  <p className="text-[14px] text-gray-800 leading-snug font-bold">
-                    That's great! As a representative of {formData.brand_company || 'our company'}, my objective is {formData.objective || 'to assist you'}.
-                  </p>
-                </div>
-              </div>
-
-              {/* Chat Input */}
-              <div className="p-3 bg-white border-t border-gray-50">
-                <div className="flex items-center gap-3 bg-gray-100 rounded-full px-4 py-2">
-                  <div className="flex-1 text-[10px] text-gray-400 font-bold">Type a message...</div>
-                  <div className="w-6 h-6 bg-primary rounded-full flex items-center justify-center text-white shadow-lg shadow-primary/20">
-                    <Plus className="w-3 h-3" />
-                  </div>
-                </div>
-              </div>
+              ) : <AgentGuide agentId={selectedAgentId} token={token} />}
             </div>
-          </div>
+          )}
 
-          {/* Advanced Data Feed */}
-          <div className="mt-8 w-full space-y-4">
-            <div className="flex items-center justify-between px-2">
-              <h6 className="text-[9px] font-black text-gray-900 uppercase tracking-[0.2em]">Live Intelligence</h6>
-              <div className="flex gap-1">
-                <div className="w-1 h-1 rounded-full bg-primary animate-bounce" />
-                <div className="w-1 h-1 rounded-full bg-primary animate-bounce" style={{ animationDelay: '0.2s' }} />
-                <div className="w-1 h-1 rounded-full bg-primary animate-bounce" style={{ animationDelay: '0.4s' }} />
-              </div>
-            </div>
-
-            <div className="space-y-2.5">
-              <div className="p-3.5 bg-white border border-gray-100 rounded-[1.2rem] shadow-sm space-y-1">
-                <div className="flex items-center gap-2 text-primary">
-                  <BrainCircuit className="w-3 h-3" />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Active Role</span>
-                </div>
-                <p className="text-[11px] font-black text-gray-900 leading-tight truncate">
-                  {formData.role || 'Defining role...'}
-                </p>
-              </div>
-
-              <div className="p-3.5 bg-white border border-gray-100 rounded-[1.2rem] shadow-sm space-y-1">
-                <div className="flex items-center gap-2 text-purple-500">
-                  <Layers className="w-3 h-3" />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Knowledge Context</span>
-                </div>
-                <p className="text-[10px] font-bold text-gray-500 line-clamp-1 leading-relaxed">
-                  {formData.knowledge_base || 'No knowledge base provided yet.'}
-                </p>
-              </div>
-
-              <div className="p-3.5 bg-white border border-gray-100 rounded-[1.2rem] shadow-sm space-y-1">
-                <div className="flex items-center gap-2 text-orange-500">
-                  <AlertCircle className="w-3 h-3" />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Tone & Personality</span>
-                </div>
-                <p className="text-[10px] font-bold text-gray-900 leading-relaxed truncate">
-                  {formData.personality || 'Standard AI Personality'}
-                </p>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
   );
-
 }

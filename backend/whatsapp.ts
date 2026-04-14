@@ -23,6 +23,8 @@ interface SessionManager {
 }
 
 const sessions: SessionManager = {};
+const qrCache: { [key: string]: string } = {};
+const reconnectAttempts: { [key: string]: number } = {};
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -30,7 +32,38 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-export async function connectToWhatsApp(sessionId: string, io: SocketIOServer) {
+export async function connectToWhatsApp(sessionId: string, io: SocketIOServer, force: boolean = false) {
+  if (force) {
+    console.log(`Force reconnecting session ${sessionId}, clearing session directory`);
+    if (sessions[sessionId]) {
+      try { sessions[sessionId].end(undefined); } catch (e) {}
+      delete sessions[sessionId];
+    }
+    const sessionDir = path.join(process.cwd(), 'sessions', sessionId);
+    if (fs.existsSync(sessionDir)) {
+      try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      } catch (e) {
+        console.error(`Failed to delete session dir for ${sessionId}:`, e);
+      }
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  } else if (sessions[sessionId]) {
+    // Sirf skip karo agar actually connected hai
+    const sock = sessions[sessionId];
+    if ((sock as any).user) {
+      console.log(`Session ${sessionId} already connected, skipping`);
+      return sock;
+    }
+    // Connected nahi — purana cleanup karo
+    console.log(`Session ${sessionId} socket exists but not connected, cleaning up`);
+    try { sock.end(undefined); } catch (e) {}
+    delete sessions[sessionId];
+  }
+
+  await db.prepare('UPDATE whatsapp_sessions SET status = ? WHERE id = ?').run('connecting', sessionId);
+  io.emit('connection_status', { sessionId, status: 'connecting' });
+
   const sessionDir = path.join(process.cwd(), 'sessions', sessionId);
   if (!fs.existsSync(sessionDir)) {
     fs.mkdirSync(sessionDir, { recursive: true });
@@ -51,42 +84,107 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer) {
 
   sessions[sessionId] = sock;
 
+  // Set a timeout to reset status if stuck in connecting for too long
+  setTimeout(async () => {
+    try {
+      const session = await db.prepare('SELECT status FROM whatsapp_sessions WHERE id = ?').get(sessionId);
+      if (session && session.status === 'connecting' && sessions[sessionId] === sock) {
+        console.log(`Session ${sessionId} stuck in connecting for 2 mins, resetting...`);
+        await db.prepare('UPDATE whatsapp_sessions SET status = ? WHERE id = ?').run('disconnected', sessionId);
+        io.emit('connection_status', { sessionId, status: 'disconnected' });
+        delete sessions[sessionId];
+        try { sock.end(undefined); } catch (e) {}
+      }
+    } catch (e) {}
+  }, 120000); // 2 minutes timeout
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
+    
+    if (connection) {
+      console.log(`Connection update for session ${sessionId}: ${connection}`);
+      io.emit('connection_status', { sessionId, status: connection });
+    }
 
     if (qr) {
+      qrCache[sessionId] = qr;
+      // Multiple times emit karo taake frontend zaroor receive kare
       io.emit('qr', { sessionId, qr });
+      setTimeout(() => io.emit('qr', { sessionId, qr }), 1000);
+      setTimeout(() => io.emit('qr', { sessionId, qr }), 3000);
     }
 
     if (connection === 'close') {
+      delete qrCache[sessionId];
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       
-      console.log(`Connection closed for session ${sessionId}. Status: ${statusCode}. Reconnecting: ${shouldReconnect}`);
+      // Check current status in DB
+      const session = await db.prepare('SELECT status FROM whatsapp_sessions WHERE id = ?').get(sessionId) as any;
+      
+      // Reconnect karo agar: connected ya connecting tha, aur logout nahi tha
+      const shouldReconnect = session 
+        && (session.status === 'connected' || session.status === 'connecting')
+        && statusCode !== DisconnectReason.loggedOut
+        && statusCode !== 401; // 401 = logged out
+      
+      console.log(`Connection closed for session ${sessionId}. Status: ${statusCode}. DB Status: ${session?.status}. Reconnecting: ${shouldReconnect}`);
       
       if (shouldReconnect) {
+        // Limit reconnection attempts to avoid infinite loops
+        reconnectAttempts[sessionId] = (reconnectAttempts[sessionId] || 0) + 1;
+        if (reconnectAttempts[sessionId] > 15) {
+          console.log(`Max reconnection attempts reached for session ${sessionId}`);
+          await db.prepare('UPDATE whatsapp_sessions SET status = ? WHERE id = ?').run('disconnected', sessionId);
+          io.emit('connection_status', { sessionId, status: 'disconnected' });
+          delete sessions[sessionId];
+          delete reconnectAttempts[sessionId];
+          return;
+        }
+
         // Add a small delay for stream errors (like 515) to avoid rapid reconnection loops
         const delay = statusCode === 515 ? 5000 : 2000;
         setTimeout(() => connectToWhatsApp(sessionId, io), delay);
       } else {
-        // Logged out, clean up
-        if (fs.existsSync(sessionDir)) {
-          fs.rmSync(sessionDir, { recursive: true, force: true });
+        // Not reconnecting — update status to disconnected if it wasn't already
+        if (session && session.status !== 'disconnected') {
+          await db.prepare('UPDATE whatsapp_sessions SET status = ? WHERE id = ?').run('disconnected', sessionId);
+          io.emit('connection_status', { sessionId, status: 'disconnected' });
         }
-        await db.prepare('UPDATE whatsapp_sessions SET status = ?, number = NULL WHERE id = ?').run('disconnected', sessionId);
-        io.emit('connection_status', { sessionId, status: 'disconnected' });
-        io.emit('session_disconnected', { sessionId });
+
+        // If logged out, clean up session directory
+        if (statusCode === DisconnectReason.loggedOut) {
+          if (fs.existsSync(sessionDir)) {
+            fs.rmSync(sessionDir, { recursive: true, force: true });
+          }
+          await db.prepare('UPDATE whatsapp_sessions SET number = NULL WHERE id = ?').run(sessionId);
+          io.emit('session_disconnected', { sessionId });
+        }
+
         delete sessions[sessionId];
+        delete reconnectAttempts[sessionId];
       }
     } else if (connection === 'open') {
       console.log(`Opened connection for session ${sessionId}`);
-      const number = sock.user?.id.split(':')[0];
+      // Clear any connecting timeout if we had one (though we'll just let it check and see it's 'connected')
+      delete qrCache[sessionId];
+      delete reconnectAttempts[sessionId];
+      const rawId = sock.user?.id || '';
+      const number = rawId.split(':')[0].split('@')[0];
+      const profileName = sock.user?.name || null;
+      
+      console.log(`Session ${sessionId} connected: number=${number}, name=${profileName}`);
       
       // Handle UNIQUE constraint: Clear this number from any other session first
       await db.prepare('UPDATE whatsapp_sessions SET number = NULL WHERE number = ? AND id != ?').run(number, sessionId);
       
-      await db.prepare('UPDATE whatsapp_sessions SET status = ?, number = ? WHERE id = ?').run('connected', number, sessionId);
-      io.emit('connection_status', { sessionId, status: 'connected', number });
+      // Save real number — profile_name column safely update karo
+      try {
+        await db.prepare('UPDATE whatsapp_sessions SET status = ?, number = ?, profile_name = ? WHERE id = ?').run('connected', number, profileName, sessionId);
+      } catch (e) {
+        // profile_name column nahi hogi purani DB mein — without it save karo
+        await db.prepare('UPDATE whatsapp_sessions SET status = ?, number = ? WHERE id = ?').run('connected', number, sessionId);
+      }
+      io.emit('connection_status', { sessionId, status: 'connected', number, profileName });
       
       // Check for unreplied messages on connection
       setTimeout(() => checkUnrepliedMessages(sessionId, sock, io), 5000);
@@ -97,7 +195,14 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer) {
 
   sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, isLatest }) => {
     console.log(`Syncing history for session ${sessionId}: ${chats.length} chats, ${contacts.length} contacts, ${messages.length} messages`);
-    io.emit('sync_status', { sessionId, status: 'syncing', progress: 0, message: 'Syncing contacts...' });
+    
+    let sessionName = 'WhatsApp';
+    try {
+      const session = await db.prepare('SELECT name FROM whatsapp_sessions WHERE id = ?').get(sessionId) as any;
+      if (session?.name) sessionName = session.name;
+    } catch (e) {}
+
+    io.emit('sync_status', { sessionId, sessionName, status: 'syncing', progress: 0, message: 'Syncing contacts...' });
     
     try {
       // Sync contacts in a single transaction for speed
@@ -105,7 +210,7 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer) {
       const insertContact = await db.prepare('INSERT OR REPLACE INTO contacts (session_id, jid, name, number) VALUES (?, ?, ?, ?)');
       for (const contact of contacts) {
         const number = contact.id.split('@')[0];
-        let name = contact.name || contact.verifiedName || null;
+        let name = contact.name || contact.verifiedName || contact.notify || null;
         
         if (!name) {
           const globalName = await db.prepare('SELECT name FROM contacts WHERE jid = ? AND name IS NOT NULL LIMIT 1').get(contact.id) as any;
@@ -113,11 +218,15 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer) {
         }
         
         await insertContact.run(sessionId, contact.id, name, number);
+        // Update conversation contact_name if it's missing
+        if (name) {
+          await db.prepare('UPDATE conversations SET contact_name = ? WHERE session_id = ? AND contact_number = ? AND (contact_name IS NULL OR contact_name = ?)').run(name, sessionId, contact.id, number);
+        }
       }
       await db.exec('COMMIT');
 
       // Sync chats (conversations)
-      io.emit('sync_status', { sessionId, status: 'syncing', progress: 5, message: 'Syncing chats...' });
+      io.emit('sync_status', { sessionId, sessionName, status: 'syncing', progress: 5, message: 'Syncing chats...' });
       await db.exec('BEGIN TRANSACTION');
       const insertConv = await db.prepare('INSERT OR IGNORE INTO conversations (session_id, contact_number, contact_name, last_message_at) VALUES (?, ?, ?, ?)');
       for (const chat of chats) {
@@ -127,7 +236,7 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer) {
       await db.exec('COMMIT');
 
       // Sync messages/conversations
-      io.emit('sync_status', { sessionId, status: 'syncing', progress: 10, message: 'Syncing messages...' });
+      io.emit('sync_status', { sessionId, sessionName, status: 'syncing', progress: 10, message: 'Syncing messages...' });
       
       let processed = 0;
       const total = messages.length;
@@ -147,10 +256,10 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer) {
         await db.exec('COMMIT');
         
         const progress = Math.min(10 + Math.round((processed / total) * 90), 99);
-        io.emit('sync_status', { sessionId, status: 'syncing', progress, message: `Syncing messages (${processed}/${total})...` });
+        io.emit('sync_status', { sessionId, sessionName, status: 'syncing', progress, message: `Syncing messages (${processed}/${total})...` });
       }
       
-      io.emit('sync_status', { sessionId, status: 'completed', progress: 100 });
+      io.emit('sync_status', { sessionId, sessionName, status: 'completed', progress: 100 });
     } catch (error) {
       console.error(`Error during history sync for session ${sessionId}:`, error);
       await db.exec('ROLLBACK').catch(() => {});
@@ -180,20 +289,20 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer) {
 
   sock.ev.on('contacts.upsert', async (contacts) => {
     const insertContact = await db.prepare('INSERT OR REPLACE INTO contacts (session_id, jid, name, number) VALUES (?, ?, ?, ?)');
-    const updateConv = await db.prepare('UPDATE conversations SET contact_name = ? WHERE session_id = ? AND contact_number = ?');
     for (const contact of contacts) {
       const number = contact.id.split('@')[0];
-      let name = contact.name || contact.verifiedName || null;
+      let name = contact.name || contact.verifiedName || (contact as any).notify || null;
       
-      // FORCEFUL GLOBAL NAME RETRIEVAL
       if (!name) {
         const globalName = await db.prepare('SELECT name FROM contacts WHERE jid = ? AND name IS NOT NULL LIMIT 1').get(contact.id) as any;
         if (globalName) name = globalName.name;
       }
 
       await insertContact.run(sessionId, contact.id, name, number);
+      
       if (name) {
-        await updateConv.run(name, sessionId, contact.id);
+        // Update by both full JID and number-only to catch all formats
+        await db.prepare('UPDATE conversations SET contact_name = ? WHERE session_id = ? AND (contact_number = ? OR contact_number = ?)').run(name, sessionId, contact.id, number);
       }
     }
   });
@@ -201,13 +310,21 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer) {
   sock.ev.on('messages.upsert', async (m) => {
     if (m.type === 'notify') {
       for (const msg of m.messages) {
-        // Skip status updates
         if (msg.key.remoteJid === 'status@broadcast') continue;
+
+        // Save pushName to contacts immediately
+        if (msg.pushName && msg.key.remoteJid) {
+          const jid = msg.key.remoteJid;
+          const number = jid.split('@')[0];
+          await db.prepare('INSERT OR REPLACE INTO contacts (session_id, jid, name, number) VALUES (?, ?, ?, ?)')
+            .run(sessionId, jid, msg.pushName, number);
+          await db.prepare('UPDATE conversations SET contact_name = ? WHERE session_id = ? AND contact_number = ? AND (contact_name IS NULL OR contact_name = ?)')
+            .run(msg.pushName, sessionId, jid, number);
+        }
 
         if (!msg.key.fromMe && msg.message) {
           await handleIncomingMessage(sessionId, sock, msg, io);
         } else if (msg.key.fromMe && msg.message) {
-          // If message sent from phone, sync it and emit
           await saveMessage(sessionId, sock, msg, io, true);
         }
       }
@@ -215,6 +332,10 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer) {
   });
 
   return sock;
+}
+
+export function getQrCode(sessionId: string) {
+  return qrCache[sessionId];
 }
 
 async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMessageInfo, io: SocketIOServer, shouldEmit: boolean = true) {
@@ -351,6 +472,9 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
 
   if (!text) return null;
 
+  // Clean number — strip WhatsApp suffix
+  const cleanFrom = from.replace('@s.whatsapp.net', '').replace('@g.us', '');
+
   // Get or create conversation
   let conversation = await db.prepare('SELECT * FROM conversations WHERE session_id = ? AND contact_number = ?').get(sessionId, from) as any;
   
@@ -414,13 +538,15 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
     }
   }
 
-  // Update contact name if available in pushName
+  // Always update contact name from pushName (real WhatsApp display name)
   if (!msg.key.fromMe && msg.pushName) {
     await db.prepare('UPDATE conversations SET contact_name = ? WHERE id = ?').run(msg.pushName, conversation.id);
-  } else if (conversation && !conversation.contact_name && !msg.key.fromMe) {
-    // Try to fetch from contacts table if we synced it before
-    const contact = await db.prepare('SELECT name FROM contacts WHERE session_id = ? AND jid = ?').get(sessionId, from) as any;
-    if (contact && contact.name) {
+    // Also update contacts table
+    await db.prepare('INSERT OR REPLACE INTO contacts (session_id, jid, name, number) VALUES (?, ?, ?, ?)').run(sessionId, from, msg.pushName, from.split('@')[0]);
+  } else if (conversation && !conversation.contact_name) {
+    // Try contacts table
+    const contact = await db.prepare('SELECT name FROM contacts WHERE (session_id = ? AND jid = ?) OR (jid = ?) ORDER BY name DESC LIMIT 1').get(sessionId, from, from) as any;
+    if (contact?.name) {
       await db.prepare('UPDATE conversations SET contact_name = ? WHERE id = ?').run(contact.name, conversation.id);
     }
   }
@@ -455,7 +581,7 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
         transcription: (msg as any).transcription || null,
         unread_count: updatedConv.unread_count,
         contact_name: updatedConv.contact_name,
-        contact_number: updatedConv.contact_number,
+        contact_number: (updatedConv.contact_number || '').replace('@s.whatsapp.net','').replace('@g.us',''),
         is_saved: updatedConv.is_saved,
         is_ordered: updatedConv.is_ordered,
         is_rated: updatedConv.is_rated,
@@ -663,6 +789,42 @@ async function checkUnrepliedMessages(sessionId: string, sock: WASocket, io: Soc
   }
 }
 
+// ============================================================
+// GENERIC SERVICE DETECTION ENGINE
+// ============================================================
+function detectService(message: string, services: any[]): any | null {
+  if (!services || services.length === 0) return null;
+  const lower = message.toLowerCase();
+  for (const svc of services) {
+    if (!svc.keywords) continue;
+    for (const kw of svc.keywords) {
+      if (lower.includes(kw.toLowerCase())) return svc;
+    }
+  }
+  return null;
+}
+
+function buildConfigContext(config: any, agent: any): string {
+  if (!config || !config.services || config.services.length === 0) return '';
+  
+  const serviceLines = config.services.map((s: any) => {
+    let line = `• ${s.name}`;
+    if (s.keywords?.length) line += ` (keywords: ${s.keywords.join(', ')})`;
+    if (s.pricing === 'allowed' && s.price_details) line += ` — Price: ${s.price_details}`;
+    if (s.pricing === 'not_allowed') line += ` — Pricing not shared until analysis`;
+    if (s.ask_for) line += ` — Ask client for: ${s.ask_for}`;
+    return line;
+  }).join('\n');
+
+  return `
+BUSINESS SERVICES:
+${serviceLines}
+
+PRICING RULE: ${config.no_pricing_message || 'Share pricing only if allowed for that service.'}
+FALLBACK: ${config.fallback_message || 'Ask for clarification if confused.'}`;
+}
+
+
 async function processAIResponse(sessionId: string, sock: WASocket, conversation: any, userMessage: string, io: SocketIOServer) {
   try {
     const session = await db.prepare('SELECT user_id, agent_id FROM whatsapp_sessions WHERE id = ?').get(sessionId) as any;
@@ -705,31 +867,50 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     const contactName = conversation.contact_name || '';
     const isExistingClient = contactName.includes('Client') || contactName.includes('CUS');
     
-    // 4. Fetch Context (Last 10 messages)
-    const contextLimit = 10;
+    // 4. Check if 5+ hours since last message → send welcome back msg
+    const lastContactMsg = await db.prepare(`
+      SELECT created_at FROM messages 
+      WHERE conversation_id = ? AND sender = 'contact' 
+      ORDER BY created_at DESC LIMIT 1
+    `).get(conversation.id) as any;
+    
+    const hoursSinceLastMsg = lastContactMsg 
+      ? (now.getTime() - new Date(lastContactMsg.created_at).getTime()) / (1000 * 60 * 60)
+      : 0;
+    const isReturningAfterLongTime = hoursSinceLastMsg >= 5;
+
+    // Fetch last 7 messages for full context
     const lastMessages = await db.prepare(`
       SELECT sender, content, created_at 
       FROM messages 
       WHERE conversation_id = ? 
       ORDER BY created_at DESC 
-      LIMIT ?
-    `).all(conversation.id, contextLimit) as any[];
+      LIMIT 7
+    `).all(conversation.id) as any[];
     
     const conversationHistory = lastMessages.reverse();
 
-    // 5. Anti-Repetition: Similarity Check (Last 5 messages)
-    const recentAgentMessages = conversationHistory.filter(m => m.sender === 'agent').slice(-5);
+    // Total messages in this conversation
+    const totalMsgCount = await db.prepare(
+      'SELECT COUNT(*) as cnt FROM messages WHERE conversation_id = ?'
+    ).get(conversation.id) as any;
+    const isFirstEverMessage = (totalMsgCount?.cnt || 0) <= 1;
 
-    // 6. Greeting & Identity Control (Once per day)
-    const lastGreeting = conversation.last_greeting_at ? new Date(conversation.last_greeting_at) : null;
-    const isNewDay = !lastGreeting || (now.getTime() - lastGreeting.getTime() > 24 * 60 * 60 * 1000);
+    // Agent ke sent messages (anti-repetition)
+    const recentAgentMessages = conversationHistory.filter(m => m.sender === 'agent').slice(-5);
+    const alreadyGreeted = recentAgentMessages.length > 0;
+
+    // Last agent message — context ke liye
+    const lastAgentMsg = recentAgentMessages[recentAgentMessages.length - 1];
     
-    let greetingInstruction = "";
-    if (isNewDay) {
-      greetingInstruction = `This is your first interaction with the user today. You may include a brief, natural greeting and introduce yourself if appropriate (Your name is ${agent.name}). Use a warm, human tone.`;
-    } else {
-      greetingInstruction = `You have already greeted the user today. STRICT RULE: DO NOT use any greetings like "Hi", "Hello", "Hey", or "Hi [Name]". DO NOT introduce yourself again. Start your response directly by addressing the user's message or continuing the previous topic.`;
-    }
+    // Kya last agent message mein question tha?
+    const lastAgentAskedQuestion = lastAgentMsg && (
+      lastAgentMsg.content.includes('?') || 
+      lastAgentMsg.content.includes('کون') ||
+      lastAgentMsg.content.includes('کیا') ||
+      lastAgentMsg.content.includes('which') ||
+      lastAgentMsg.content.includes('what')
+    );
 
     // 7. Lead Stage & Context Lock
     const lead = await db.prepare('SELECT status, website, service_interest, objections FROM leads WHERE conversation_id = ?').get(conversation.id) as any;
@@ -796,61 +977,91 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
       }
     }
 
-    // 6. Knowledge & Memory
+    // 6. Knowledge & Memory — load from both training files AND agent memory
     const trainingFiles = await db.prepare('SELECT content FROM training_files WHERE agent_id = ?').all(agent.id) as any[];
-    const trainingData = trainingFiles.map(f => f.content).join('\n\n');
+    const trainingData = trainingFiles.map((f: any) => f.content).join('\n\n');
+    
+    // Load persistent agent memory (from chat training + document training)
+    const agentMemories = await db.prepare(
+      'SELECT topic, content, source FROM agent_memory WHERE agent_id = ? ORDER BY updated_at DESC'
+    ).all(agent.id) as any[];
+    const memoryData = agentMemories.length > 0
+      ? agentMemories.map((m: any) => `[${m.source.toUpperCase()} MEMORY] ${m.topic}: ${m.content}`).join('\n')
+      : '';
 
-    const systemInstruction = `
-      IDENTITY & ROLE:
-      Name: ${agent.name}
-      Role: ${agent.role}
-      Personality: ${agent.personality}
-      Primary Mission: ${agent.objective}
-      Tone: ${agent.tone}
-      Strategy: ${agent.strategy}
-      
-      KNOWLEDGE BASE:
-      ${agent.knowledge_base}
-      
-      ADDITIONAL TRAINING & SELF-IMPROVEMENT:
-      ${trainingData}
-      - SELF-TRAINING RULE: Analyze the conversation history below. Identify which of your previous approaches were most effective in engaging the user. Adapt your tone and strategy to match the user's communication style. If the user is brief, be brief. If the user is detailed, provide more value.
-      
-      USER CONTEXT:
-      - Intent: ${intent || 'Unknown'}
-      - Engagement Score: ${engagementScore}/100
-      - Service Interest: ${serviceInterest || 'Not specified'}
-      - Previous Objections: ${objections || 'None'}
-      
-      THINKING PROCESS (INTERNAL LOGIC):
-      1. Analyze the User's Message: What is their immediate question, concern, or intent?
-      2. Review Context: Look at the last 10 messages. What is the current "vibe" and stage of the conversation?
-      3. Strategic Goal: What is the single most important thing to say right now to provide value or move the conversation forward?
-      4. Avoid Robotic Patterns: Do NOT use meta-commentary like "I saw you replied" or "I noticed your message". Humans don't say that.
-      5. Single Message Constraint: Formulate the entire response into ONE clear, concise, and natural message.
-      6. Human Check: Does this sound like a helpful person at OnDigix Solutions, or a bot?
-      
-      CONVERSATION RULES:
-      - ${greetingInstruction}
-      - ${stageInstruction}
-      - ${intentInstruction}
-      - ${isAck ? "The user just acknowledged. Send a VERY SHORT, natural acknowledgment (e.g. 'Got it 👍' or 'You're welcome!') and then STOP. Do not ask more questions." : "Continue the conversation naturally."}
-      - BE HUMAN-LIKE: Use natural language. Avoid being overly formal or robotic. Use emojis naturally (e.g., 👍, 😊, 🚀).
-      - DIRECT REPLY: Address the user's current query directly and immediately.
-      - SINGLE MESSAGE REPLY: You are STRICTLY FORBIDDEN from sending more than one message. Combine all your thoughts into one.
-      - NO BOT PHRASES: Never say "I saw you replied", "I noticed you replied", "How can I help you today?", or anything similar. Just get straight to the point.
-      - CONTEXT AWARENESS: Maintain conversation flow. Use the last 10 messages to ensure you are not repeating yourself or asking for information already provided.
-      - ANTI-REPETITION: 
-        * DO NOT repeat your previous messages or sentiments.
-        * Check history for patterns to avoid: ${JSON.stringify(recentAgentMessages.map(m => m.content))}
-      - FALLBACK: If you are confused, ask a natural clarifying question.
-      
-      CONVERSATION HISTORY:
-      ${conversationHistory.map(m => `${m.sender === 'agent' ? 'Assistant' : 'User'}: ${m.content}`).join('\n')}
-    `;
+    // Load agent config (services, pricing rules)
+    let agentConfig: any = null;
+    let configContext = '';
+    let detectedService: any = null;
+    try {
+      if (agent.agent_config) {
+        agentConfig = JSON.parse(agent.agent_config);
+        configContext = buildConfigContext(agentConfig, agent);
+        detectedService = detectService(userMessage, agentConfig?.services || []);
+      }
+    } catch(e) {}
+
+    // Service-specific custom reply check
+    if (detectedService?.custom_reply) {
+      // Send fixed reply directly
+      const timestamp = new Date().toISOString();
+      await sock.sendMessage(conversation.contact_number, { text: detectedService.custom_reply });
+      await db.prepare('INSERT INTO messages (conversation_id, sender, content, type, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(conversation.id, 'agent', detectedService.custom_reply, 'text', timestamp);
+      await db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversation.id);
+      io.emit('new_message', { conversation_id: conversation.id, sender: 'agent', content: detectedService.custom_reply, type: 'text', created_at: timestamp });
+      return;
+    }
+
+    // Is first message hai is conversation mein?
+    const clientName = conversation.contact_name || 'Client';
+
+    const systemInstruction = `You are ${agent.name}, assistant for ${agent.brand_company || 'our company'}.
+
+YOUR INFO:
+- Name: ${agent.name}
+- Company: ${agent.brand_company || 'N/A'}
+- Services: ${agent.product_service || 'N/A'}
+- Goal: ${agent.objective || 'Help clients'}
+
+YOUR KNOWLEDGE (use this to answer — highest priority):
+${memoryData || 'Use your identity info above.'}
+${trainingData ? `TRAINING DOCS:\n${trainingData}` : ''}
+${configContext}
+${detectedService ? `DETECTED SERVICE: Client is asking about "${detectedService.name}".${detectedService.ask_for ? ` Ask them for their ${detectedService.ask_for.replace('_',' ')}.` : ''}${detectedService.pricing === 'not_allowed' ? ` DO NOT share pricing — say: "${agentConfig?.no_pricing_message}"` : ''}${detectedService.pricing === 'allowed' && detectedService.price_details ? ` Pricing info you can share: ${detectedService.price_details}` : ''}` : ''}
+
+--- FULL CONVERSATION HISTORY ---
+${conversationHistory.length > 0
+  ? conversationHistory.map(m => `[${m.sender === 'agent' ? agent.name : clientName}]: ${m.content}`).join('\n')
+  : '(First message ever in this conversation)'}
+--- END HISTORY ---
+
+CLIENT JUST SENT: "${userMessage}"
+
+REPLY INSTRUCTIONS:
+${isFirstEverMessage
+  ? `1. FIRST MESSAGE — Greet as ${agent.name} from ${agent.brand_company || 'our company'}, then answer their message.`
+  : alreadyGreeted
+    ? `1. ONGOING CHAT — NO greeting whatsoever. Jump straight to answering.`
+    : `1. Continue naturally from history.`
+}
+${lastAgentAskedQuestion
+  ? `2. Your previous message asked a question. Client answered: "${userMessage}". Now give the RELEVANT DETAILS for that answer — don't repeat the question.`
+  : `2. Answer their message directly and specifically.`
+}
+${isReturningAfterLongTime && !isFirstEverMessage ? `3. Client back after 5+ hours — brief warm welcome, then answer.` : ''}
+${isAck ? `3. Client said ok/thanks — reply "You're welcome! 😊" and stop.` : ''}
+
+HARD RULES:
+- NEVER say: "Thanks for reaching out" / "How can I help you today" / "Thank you for replying" / "I saw you replied"
+- NEVER repeat any message already in history above
+- NEVER make up information not in your knowledge
+- Answer in client's language (Urdu if Urdu, English if English)
+- ONE message only, short and natural
+- If you don't know → "Let me confirm and get back to you 🙏"`;
 
     const aiResponse = await callAI(session.user_id, userMessage, systemInstruction);
-    
+   
     // 10. Anti-Repetition & Robotic Phrase Check
     const roboticPhrases = [
       "i saw you replied",
@@ -859,7 +1070,7 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
       "how can i assist you today",
       "i am here to help",
       "i saw your message",
-      "hi whatsapp auto",
+      "hi ondigix",
       "i saw you replied. how can i help?"
     ];
 
@@ -899,6 +1110,9 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
 
     // Update Timestamps
     const timestamp = new Date().toISOString();
+    const lastGreetingAt = conversation.last_greeting_at ? new Date(conversation.last_greeting_at) : null;
+    const isNewDay = !lastGreetingAt || lastGreetingAt.toDateString() !== now.toDateString();
+
     if (isNewDay) {
       await db.prepare('UPDATE conversations SET last_greeting_at = ? WHERE id = ?').run(timestamp, conversation.id);
     }
@@ -937,6 +1151,29 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
 
 export function getSession(sessionId: string) {
   return sessions[sessionId];
+}
+
+export async function deleteSession(sessionId: string) {
+  const sock = sessions[sessionId];
+  if (sock) {
+    try {
+      await sock.logout();
+    } catch (e) {
+      try { sock.end(undefined); } catch (e2) {}
+    }
+    delete sessions[sessionId];
+  }
+  delete qrCache[sessionId];
+  delete reconnectAttempts[sessionId];
+  
+  const sessionDir = path.join(process.cwd(), 'sessions', sessionId);
+  if (fs.existsSync(sessionDir)) {
+    try {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    } catch (e) {
+      console.error(`Failed to remove directory for session ${sessionId}:`, e);
+    }
+  }
 }
 
 export function startFollowupScheduler(io: SocketIOServer) {

@@ -26,7 +26,8 @@ const mysqlConfig = {
 const sqliteConfig = {
   client: 'better-sqlite3',
   connection: {
-    filename: path.join(process.cwd(), 'database.sqlite'),
+    // AWS pe /data volume mount karo — warna process.cwd() use hoga
+    filename: process.env.DB_PATH || path.join(process.cwd(), 'database.sqlite'),
   },
   useNullAsDefault: true
 };
@@ -145,9 +146,17 @@ async function initDb() {
       table.text('others');
       table.text('avatar');
       table.text('strategy');
+      table.text('agent_config'); // JSON: services, greeting, fallback, pricing rules
       table.integer('is_active').defaultTo(1);
       table.timestamp('created_at').defaultTo(dbProxy.fn.now());
     });
+  } else {
+    const hasAgentConfig = await dbProxy.schema.hasColumn('agents', 'agent_config');
+    if (!hasAgentConfig) {
+      await dbProxy.schema.table('agents', (table) => {
+        table.text('agent_config').nullable();
+      });
+    }
   }
 
   const hasSessions = await dbProxy.schema.hasTable('whatsapp_sessions');
@@ -170,6 +179,46 @@ async function initDb() {
         table.string('platform').defaultTo('whatsapp');
       });
     }
+    const hasProfileName = await dbProxy.schema.hasColumn('whatsapp_sessions', 'profile_name');
+    if (!hasProfileName) {
+      await dbProxy.schema.table('whatsapp_sessions', (table) => {
+        table.string('profile_name').nullable();
+      });
+    }
+  }
+
+  // Agent memory table — permanent training chat history
+  const hasAgentMemory = await dbProxy.schema.hasTable('agent_memory');
+  if (!hasAgentMemory) {
+    await dbProxy.schema.createTable('agent_memory', (table) => {
+      table.increments('id').primary();
+      table.integer('agent_id').unsigned().references('id').inTable('agents').onDelete('CASCADE');
+      table.string('topic').notNullable();
+      table.text('content').notNullable();
+      table.text('prev_content').nullable(); // Archive of previous version
+      table.string('source').defaultTo('chat');
+      table.timestamp('created_at').defaultTo(dbProxy.fn.now());
+      table.timestamp('updated_at').defaultTo(dbProxy.fn.now());
+    });
+  } else {
+    const hasPrevContent = await dbProxy.schema.hasColumn('agent_memory', 'prev_content');
+    if (!hasPrevContent) {
+      await dbProxy.schema.table('agent_memory', (table) => {
+        table.text('prev_content').nullable();
+      });
+    }
+  }
+
+  // Agent training chat sessions
+  const hasAgentTrainingChats = await dbProxy.schema.hasTable('agent_training_chats');
+  if (!hasAgentTrainingChats) {
+    await dbProxy.schema.createTable('agent_training_chats', (table) => {
+      table.increments('id').primary();
+      table.integer('agent_id').unsigned().references('id').inTable('agents').onDelete('CASCADE');
+      table.string('role').notNullable(); // 'user' or 'agent'
+      table.text('content').notNullable();
+      table.timestamp('created_at').defaultTo(dbProxy.fn.now());
+    });
   }
 
   const hasConversations = await dbProxy.schema.hasTable('conversations');
@@ -421,7 +470,7 @@ async function initDb() {
   if (!hasSettings) {
     await dbProxy.schema.createTable('settings', (table) => {
       table.increments('id').primary();
-      table.integer('user_id').unsigned().nullable().references('id').inTable('users').onDelete('CASCADE');
+      table.integer('user_id').unsigned().references('id').inTable('users').onDelete('CASCADE');
       table.string('provider').notNullable();
       table.string('api_key').notNullable();
       table.string('base_url');
@@ -539,7 +588,7 @@ async function initDb() {
     });
   }
 
-  console.log(`Database initialized successfully using ${isMySQL ? 'MySQL' : 'SQLite'} - WhatsApp Auto Branding`);
+  console.log(`Database initialized successfully using ${isMySQL ? 'MySQL' : 'SQLite'} - Ondigix Branding`);
 }
 
 // Helper to bridge better-sqlite3 style calls to knex (for minimal refactoring)

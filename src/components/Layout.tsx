@@ -26,6 +26,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch } from '../lib/api';
 import socket from '../lib/socket';
+import TokenTopupModal from './TokenTopupModal';
 
 interface Notification {
   id: string;
@@ -39,13 +40,15 @@ interface Notification {
 interface LayoutProps {
   children: React.ReactNode;
   activeTab: string;
-  setActiveTab: (tab: string) => void;
+  onTabChange: (tab: string) => void;
   onLogout: () => void;
+  userRole?: string | null;
 }
 
-export default function Layout({ children, activeTab, setActiveTab, onLogout }: LayoutProps) {
+export default function Layout({ children, activeTab, onTabChange, onLogout, userRole: propUserRole }: LayoutProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+  const [showTokenTopup, setShowTokenTopup] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [newLeadsCount, setNewLeadsCount] = useState(0);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
@@ -54,27 +57,21 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
   const [showNotifications, setShowNotifications] = useState(false);
   const [isAnyModalOpen, setIsAnyModalOpen] = useState(false);
 
-  // Prevent scrolling and apply blur when modals are open
   useEffect(() => {
-    const internalModalOpen = showLogoutConfirm || showNotifications || isMobileMenuOpen;
-    
     const handleExternalModal = (e: any) => {
       setIsAnyModalOpen(e.detail.isOpen);
     };
-
     window.addEventListener('toggle-modal-blur', handleExternalModal);
-
-    if (internalModalOpen || isAnyModalOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = 'unset';
-    }
-
     return () => {
-      document.body.style.overflow = 'unset';
       window.removeEventListener('toggle-modal-blur', handleExternalModal);
     };
-  }, [showLogoutConfirm, showNotifications, isMobileMenuOpen, isAnyModalOpen]);
+  }, []);
+
+  useEffect(() => {
+    const anyOpen = showLogoutConfirm || showNotifications || isMobileMenuOpen || isAnyModalOpen || showTokenTopup;
+    document.body.style.overflow = anyOpen ? 'hidden' : 'unset';
+    return () => { document.body.style.overflow = 'unset'; };
+  }, [showLogoutConfirm, showNotifications, isMobileMenuOpen, isAnyModalOpen, showTokenTopup]);
 
   useEffect(() => {
     // Socket listeners for notifications
@@ -91,10 +88,11 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
     });
 
     socket.on('tokens_exhausted', () => {
+      setShowTokenTopup(true);
       const newNotif: Notification = {
         id: Math.random().toString(36).substr(2, 9),
         title: 'Tokens Exhausted',
-        message: 'Your token balance has reached zero. Contact +92 306 4443434 for top-up.',
+        message: 'Your token balance has reached zero. Systems are paused.',
         type: 'tokens_exhausted',
         timestamp: new Date(),
         read: false
@@ -134,7 +132,7 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
     return () => clearInterval(interval);
   }, []);
 
-  const userRole = localStorage.getItem('user_role') || 'admin';
+  const userRole = propUserRole || localStorage.getItem('user_role') || 'admin';
 
   const menuItems = userRole === 'super_admin' 
     ? [
@@ -150,11 +148,12 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
         { id: 'agents', label: 'Agents', icon: Users },
         { id: 'reports', label: 'Reports', icon: BarChart3 },
         { id: 'whatsapp', label: 'Channels', icon: Layers },
+        { id: 'settings', label: 'Settings', icon: Settings },
       ];
 
   return (
     <div className="h-screen bg-[#F8F9FB] flex relative overflow-hidden">
-      <div className={`flex flex-1 h-full transition-all duration-300 ${isAnyModalOpen || showLogoutConfirm || showNotifications || isMobileMenuOpen ? 'modal-blur-active' : ''}`}>
+      <div className="flex flex-1 h-full transition-all duration-300">
         {/* Background Decoration */}
         <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
         <div className="absolute -top-[20%] -right-[10%] w-[60%] h-[60%] bg-primary/10 rounded-full blur-[120px] animate-pulse" />
@@ -166,60 +165,60 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
       <div className="flex flex-1 relative">
         {/* Desktop Sidebar */}
         <aside 
-          className={`hidden md:flex flex-col ${isSidebarExpanded ? 'w-[280px]' : 'w-[80px]'} glass-card border-r border-gray-100 h-full sticky top-0 z-[60] transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] relative overflow-hidden shrink-0 shadow-2xl shadow-gray-200/50`}
+          className={`hidden md:flex flex-col ${isSidebarExpanded ? 'w-[280px]' : 'w-[80px]'} glass-card border-r border-gray-100 h-full sticky top-0 z-[110] transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] relative overflow-hidden shrink-0 shadow-2xl shadow-gray-200/50`}
         >
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary via-purple-500 to-orange-500" />
           
-          <div className={`${isSidebarExpanded ? 'p-6' : 'py-6 px-2'} flex items-center ${isSidebarExpanded ? 'justify-between' : 'justify-center'} gap-4 transition-all duration-300`}>
-            <div className={`flex items-center ${isSidebarExpanded ? 'gap-3' : 'gap-0'} overflow-hidden`}>
+          <div className={`p-6 flex items-center ${isSidebarExpanded ? 'justify-between' : 'justify-center'}`}>
+            <div className="flex items-center gap-4">
               <button 
-                onClick={() => {
-                  setActiveTab('dashboard');
-                  setIsSidebarExpanded(true);
-                }}
-                className="w-10 h-10 bg-whatsapp rounded-2xl flex items-center justify-center shadow-xl shadow-whatsapp/20 rotate-[-5deg] hover:rotate-0 transition-all duration-500 shrink-0 cursor-pointer active:scale-95"
+                onClick={() => setIsSidebarExpanded(!isSidebarExpanded)}
+                className="w-10 h-10 bg-whatsapp rounded-2xl flex items-center justify-center shadow-xl shadow-whatsapp/20 rotate-[-5deg] hover:rotate-0 transition-all duration-500 shrink-0 cursor-pointer"
               >
-                <span className="text-white font-black text-lg italic">WA</span>
+                <span className="text-white font-black text-xl italic">WA</span>
               </button>
               {isSidebarExpanded && (
                 <motion.div
-                  initial={{ opacity: 0, x: -20 }}
+                  initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.2, duration: 0.4 }}
-                  className="flex-1 min-w-0"
+                  className="flex-1"
                 >
-                  <h1 className="text-lg font-black text-gray-900 tracking-tighter leading-none truncate">
+                  <h1 className="text-xl font-black text-gray-900 tracking-tighter leading-none">
                     WhatsApp Auto
                   </h1>
-                  <p className="text-[8px] font-black text-indigo-600 uppercase tracking-widest mt-1">Created by OnDigix</p>
+                  <p className="text-[8px] font-black text-indigo-600 uppercase tracking-widest mt-1">Created by Ondigix</p>
                 </motion.div>
               )}
             </div>
-            
-            {isSidebarExpanded && (
-              <button 
-                onClick={() => setIsSidebarExpanded(false)}
-                className="p-2 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all shrink-0"
-              >
-                <PanelLeftClose className="w-5 h-5" />
-              </button>
-            )}
           </div>
 
-        <nav className={`flex-1 ${isSidebarExpanded ? 'px-3' : 'px-2'} space-y-2 overflow-y-auto overflow-x-hidden mt-4 transition-all duration-300 custom-scrollbar`}>
-          {menuItems.map((item, index) => (
-            <motion.button
-              key={item.id}
-              initial={isSidebarExpanded ? { opacity: 0, x: -10 } : {}}
-              animate={isSidebarExpanded ? { opacity: 1, x: 0 } : {}}
-              transition={{ delay: 0.3 + (index * 0.05) }}
+        {userRole !== 'super_admin' && (
+          <div className={`px-4 mb-8 ${isSidebarExpanded ? 'px-6' : 'px-4'}`}>
+            <button
               onClick={() => {
-                setActiveTab(item.id);
-                setIsSidebarExpanded(true);
+                onTabChange('agents');
+                if (!isSidebarExpanded) setIsSidebarExpanded(true);
               }}
-              className={`w-full flex items-center ${isSidebarExpanded ? 'justify-between px-5' : 'justify-center'} py-4 rounded-2xl text-sm font-black uppercase tracking-widest transition-all relative group active:scale-[0.98] ${
+              className={`group relative w-full bg-gray-900 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-2xl shadow-gray-900/20 transition-all active:scale-[0.98] overflow-hidden ${!isSidebarExpanded ? 'aspect-square p-0' : ''}`}
+            >
+              <div className="absolute inset-0 bg-primary translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500" />
+              {isSidebarExpanded && <span className="relative z-10">Create Agent</span>}
+              {!isSidebarExpanded && <Plus className="w-4 h-4 relative z-10" />}
+            </button>
+          </div>
+        )}
+
+        <nav className="flex-1 px-3 space-y-4 overflow-y-auto overflow-x-hidden custom-scrollbar mt-4">
+          {menuItems.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => {
+                onTabChange(item.id);
+                if (!isSidebarExpanded) setIsSidebarExpanded(true);
+              }}
+              className={`w-full flex items-center ${isSidebarExpanded ? 'justify-between px-5' : 'justify-center'} py-4 rounded-2xl text-sm font-black uppercase tracking-widest transition-all relative group ${
                 activeTab === item.id 
-                  ? 'bg-white text-gray-900 shadow-xl shadow-gray-200/50 ring-1 ring-gray-100' 
+                  ? 'bg-white text-gray-900 shadow-xl shadow-gray-200/50 ring-1 ring-gray-100 translate-x-2' 
                   : 'text-gray-400 hover:bg-white/50 hover:text-gray-900'
               }`}
             >
@@ -237,14 +236,16 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
                   {item.label}
                 </div>
               )}
-            </motion.button>
+            </button>
           ))}
         </nav>
 
-        <div className={`${isSidebarExpanded ? 'p-4' : 'py-4 px-2'} space-y-6 transition-all duration-300`}>
+        <div className="p-4 space-y-6">
           <div 
-            onClick={() => !isSidebarExpanded && setIsSidebarExpanded(true)}
-            className={`flex items-center ${isSidebarExpanded ? 'justify-between px-2' : 'justify-center'} ${!isSidebarExpanded ? 'cursor-pointer hover:bg-gray-100 rounded-2xl p-1 transition-colors' : ''}`}
+            onClick={() => {
+              if (!isSidebarExpanded) setIsSidebarExpanded(true);
+            }}
+            className={`flex items-center cursor-pointer ${isSidebarExpanded ? 'justify-between px-2' : 'justify-center'}`}
           >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center border border-white shadow-sm shrink-0">
@@ -252,9 +253,8 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
               </div>
               {isSidebarExpanded && (
                 <motion.div 
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.5 }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
                   className="min-w-0"
                 >
                   <p className="text-xs font-black text-gray-900 truncate">{userRole === 'super_admin' ? 'Super Admin' : 'Admin'}</p>
@@ -281,7 +281,7 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
       {/* Mobile Header - Removed for App Format */}
 
       {/* Main Content */}
-      <main className="flex-1 h-full overflow-y-auto relative z-10 flex flex-col custom-scrollbar">
+      <main className="flex-1 h-full overflow-y-auto overflow-x-hidden relative z-10 flex flex-col custom-scrollbar">
         <div className="flex-1 p-4 md:p-8">
           {children}
         </div>
@@ -326,7 +326,7 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
             <div className="p-4">
               <button
                 onClick={() => {
-                  setActiveTab('agents');
+                  onTabChange('agents');
                   setIsMobileMenuOpen(false);
                 }}
                 className="w-full bg-[#00C853] text-white py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-[#00C853]/20"
@@ -341,7 +341,7 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
                 <button
                   key={item.id}
                   onClick={() => {
-                    setActiveTab(item.id);
+                    onTabChange(item.id);
                     setIsMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all ${
@@ -371,6 +371,11 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
           </motion.div>
         </>
       )}
+
+      <TokenTopupModal 
+        isOpen={showTokenTopup} 
+        onClose={() => setShowTokenTopup(false)} 
+      />
 
       {showLogoutConfirm && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm">

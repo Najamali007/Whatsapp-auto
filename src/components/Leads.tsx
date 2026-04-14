@@ -662,7 +662,7 @@ const Leads: React.FC<LeadsProps> = ({ onOpenChat }) => {
                             <div className="flex flex-wrap gap-1 mt-0.5">
                               {getAutoLabels(lead).slice(0, 2).map((label, idx) => (
                                 <span 
-                                  key={idx}
+                                  key={`lead-label-${lead.id}-${idx}`}
                                   className={`px-1 py-0.5 rounded text-[8px] font-bold border ${label.color} whitespace-nowrap`}
                                 >
                                   {label.text}
@@ -798,7 +798,7 @@ const Leads: React.FC<LeadsProps> = ({ onOpenChat }) => {
                   ) : chatMessages.length > 0 ? (
                     chatMessages.map((msg, idx) => (
                       <div 
-                        key={idx}
+                        key={msg.id || `chat-msg-${idx}`}
                         className={`flex ${msg.sender === 'contact' ? 'justify-start' : 'justify-end'}`}
                       >
                         <div className={`max-w-[80%] p-4 rounded-2xl shadow-sm ${
@@ -836,7 +836,7 @@ const Leads: React.FC<LeadsProps> = ({ onOpenChat }) => {
                     </p>
                     <div className="space-y-2">
                       {followupHistory.map((msg, idx) => (
-                        <div key={idx} className="p-2 bg-indigo-50/50 rounded-lg border border-indigo-100">
+                        <div key={msg.id || `followup-${idx}`} className="p-2 bg-indigo-50/50 rounded-lg border border-indigo-100">
                           <p className="text-[11px] text-gray-700 line-clamp-2">{msg.content}</p>
                           <p className="text-[9px] text-indigo-400 mt-1 font-medium">{new Date(msg.created_at).toLocaleDateString()} {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                         </div>

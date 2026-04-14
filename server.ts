@@ -21,9 +21,13 @@ import {
   interpretGuidance, 
   validateDeepSeekKey, 
   validateGeminiKey,
-  generateFollowupMessage 
+  generateFollowupMessage,
+  trainAgentWithChat,
+  trainAgentWithDocument,
+  getAgentMemory,
+  deleteAgentMemory
 } from './backend/ai.js';
-import { connectToWhatsApp, getSession, syncWhatsAppHistory, startFollowupScheduler } from './backend/whatsapp.js';
+import { connectToWhatsApp, getSession, syncWhatsAppHistory, startFollowupScheduler, getQrCode, deleteSession } from './backend/whatsapp.js';
 
 dotenv.config();
 
@@ -333,17 +337,14 @@ app.post('/api/settings', authenticateSuperAdmin, async (req: any, res) => {
       return res.status(400).json({ error: validation.error || 'Invalid API key' });
     }
 
-    // Settings are now global (linked to first super admin)
-    const superAdmin = await db.prepare("SELECT id FROM users WHERE role = 'super_admin' LIMIT 1").get() as any;
-    const targetUserId = superAdmin ? superAdmin.id : req.user.id;
-
+    // Settings are now global (user_id = 0 or similar)
     const existing = await db.prepare('SELECT id FROM settings WHERE provider = ?').get(provider) as any;
     if (existing) {
       await db.prepare("UPDATE settings SET api_key = ?, base_url = ?, model = ?, is_active = 1, status = 'active', credits_remaining = ? WHERE id = ?")
         .run(api_key, base_url || null, model || null, validation.credits, existing.id);
     } else {
       await db.prepare('INSERT INTO settings (user_id, provider, api_key, base_url, model, credits_remaining) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(targetUserId, provider, api_key, base_url || null, model || null, validation.credits);
+        .run(req.user.id, provider, api_key, base_url || null, model || null, validation.credits);
     }
     
     res.json({ 
@@ -384,6 +385,89 @@ app.delete('/api/settings/:provider', authenticateSuperAdmin, async (req: any, r
 });
 
 // --- Agent Routes ---
+// ============================================================
+// AGENT MEMORY ROUTES
+// ============================================================
+
+// Get agent memory
+app.get('/api/agents/:id/memory', authenticateToken, async (req: any, res) => {
+  try {
+    const agent = await db.prepare('SELECT id FROM agents WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    const memories = await getAgentMemory(parseInt(req.params.id));
+    res.json(memories);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a memory
+app.delete('/api/agents/:id/memory/:memoryId', authenticateToken, async (req: any, res) => {
+  try {
+    const agent = await db.prepare('SELECT id FROM agents WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    await deleteAgentMemory(parseInt(req.params.memoryId), parseInt(req.params.id));
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Train with chat — new endpoint with memory
+app.post('/api/agents/:id/train-chat', authenticateToken, async (req: any, res) => {
+  try {
+    const agent = await db.prepare('SELECT id FROM agents WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    const { message } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: 'Message required' });
+
+    // Save user message to training chat history
+    await db.prepare('INSERT INTO agent_training_chats (agent_id, role, content) VALUES (?, ?, ?)')
+      .run(req.params.id, 'user', message);
+
+    // Get chat history for context
+    const chatHistory = await db.prepare(
+      'SELECT role, content FROM agent_training_chats WHERE agent_id = ? ORDER BY created_at DESC LIMIT 20'
+    ).all(req.params.id) as any[];
+
+    const response = await trainAgentWithChat(req.user.id, parseInt(req.params.id), message, chatHistory.reverse());
+
+    // Save agent response to history
+    await db.prepare('INSERT INTO agent_training_chats (agent_id, role, content) VALUES (?, ?, ?)')
+      .run(req.params.id, 'agent', response);
+
+    res.json({ response });
+  } catch (err: any) {
+    console.error('Train chat failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get training chat history
+app.get('/api/agents/:id/train-chat-history', authenticateToken, async (req: any, res) => {
+  try {
+    const agent = await db.prepare('SELECT id FROM agents WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    const history = await db.prepare(
+      'SELECT * FROM agent_training_chats WHERE agent_id = ? ORDER BY created_at ASC'
+    ).all(req.params.id);
+    res.json(history);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear training chat history
+app.delete('/api/agents/:id/train-chat-history', authenticateToken, async (req: any, res) => {
+  try {
+    await db.prepare('DELETE FROM agent_training_chats WHERE agent_id = ?').run(req.params.id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/agents/:id/guide', authenticateToken, async (req: any, res) => {
   const agentId = req.params.id;
   const { message } = req.body;
@@ -656,7 +740,7 @@ app.post('/api/whatsapp/sessions', authenticateToken, async (req: any, res) => {
     return res.status(400).json({ error: 'This agent is already assigned to another channel. Each bot must be assigned to a specific channel.' });
   }
 
-  const result = await db.prepare('INSERT INTO whatsapp_sessions (user_id, agent_id, name) VALUES (?, ?, ?)').run(req.user.id, agent_id, name);
+  const result = await db.prepare("INSERT INTO whatsapp_sessions (user_id, agent_id, name, status) VALUES (?, ?, ?, 'disconnected')").run(req.user.id, agent_id, name);
   res.json({ id: result.lastInsertRowid });
 });
 
@@ -671,27 +755,9 @@ app.post('/api/whatsapp/sessions/bulk-delete', authenticateToken, async (req: an
       const session = await db.prepare('SELECT * FROM whatsapp_sessions WHERE id = ? AND user_id = ?').get(sid, req.user.id);
       if (!session) continue;
 
-      const sock = getSession(sid);
-      
-      if (sock) {
-        try {
-          await sock.logout();
-        } catch (e) {
-          console.warn(`Logout failed for session ${sid} during bulk deletion:`, e);
-          try { sock.end(undefined); } catch (e2) {}
-        }
-      }
-
-      const sessionDir = path.join(process.cwd(), 'sessions', sid);
-      if (fs.existsSync(sessionDir)) {
-        try {
-          fs.rmSync(sessionDir, { recursive: true, force: true });
-        } catch (e) {
-          console.error(`Failed to remove directory for session ${sid}:`, e);
-        }
-      }
-
-      await db.prepare('DELETE FROM whatsapp_sessions WHERE id = ? AND user_id = ?').run(sessionId, req.user.id);
+      await deleteSession(sid);
+      await db.prepare('DELETE FROM whatsapp_sessions WHERE id = ? AND user_id = ?').run(sid, req.user.id);
+      io.emit('session_disconnected', { sessionId: sid });
     }
     res.json({ success: true });
   } catch (error) {
@@ -702,7 +768,6 @@ app.post('/api/whatsapp/sessions/bulk-delete', authenticateToken, async (req: an
 
 app.delete('/api/whatsapp/sessions/:id', authenticateToken, async (req: any, res) => {
   const sessionId = req.params.id;
-  const sessionDir = path.join(process.cwd(), 'sessions', sessionId);
   
   try {
     // Verify ownership
@@ -711,24 +776,7 @@ app.delete('/api/whatsapp/sessions/:id', authenticateToken, async (req: any, res
       return res.status(404).json({ error: 'Session not found' });
     }
 
-    const sock = getSession(sessionId);
-    if (sock) {
-      try {
-        await sock.logout();
-      } catch (e) {
-        console.warn(`Logout failed for session ${sessionId}, forcing close:`, e);
-        try { sock.end(undefined); } catch (e2) {}
-      }
-    }
-    
-    if (fs.existsSync(sessionDir)) {
-      try {
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-      } catch (e) {
-        console.error(`Failed to remove directory for session ${sessionId}:`, e);
-      }
-    }
-    
+    await deleteSession(sessionId);
     await db.prepare('DELETE FROM whatsapp_sessions WHERE id = ? AND user_id = ?').run(sessionId, req.user.id);
     io.emit('session_disconnected', { sessionId });
     res.json({ success: true });
@@ -757,6 +805,7 @@ app.post('/api/whatsapp/sessions/:id/sync', authenticateToken, async (req: any, 
 
 app.post('/api/whatsapp/sessions/:id/connect', authenticateToken, async (req: any, res) => {
   const sessionId = req.params.id;
+  const force = req.body.force === true;
   try {
     // Verify ownership
     const session = await db.prepare('SELECT * FROM whatsapp_sessions WHERE id = ? AND user_id = ?').get(sessionId, req.user.id);
@@ -764,10 +813,37 @@ app.post('/api/whatsapp/sessions/:id/connect', authenticateToken, async (req: an
       return res.status(404).json({ error: 'Session not found' });
     }
 
-    await connectToWhatsApp(sessionId, io);
-    res.json({ success: true });
+    await connectToWhatsApp(sessionId, io, force);
+    
+    // If there's an existing QR code, emit it immediately
+    const qr = getQrCode(sessionId);
+    if (qr) {
+      io.emit('qr', { sessionId, qr });
+    }
+    
+    res.json({ success: true, qr: qr ? qr : null });
   } catch (error) {
     res.status(500).json({ error: 'Failed to connect' });
+  }
+});
+
+app.get('/api/whatsapp/sessions/:id/qr', authenticateToken, async (req: any, res) => {
+  const sessionId = req.params.id;
+  try {
+    // Verify ownership
+    const session = await db.prepare('SELECT * FROM whatsapp_sessions WHERE id = ? AND user_id = ?').get(sessionId, req.user.id);
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    const qr = getQrCode(sessionId);
+    if (qr) {
+      // Also emit it just in case
+      io.emit('qr', { sessionId, qr });
+    }
+    res.json({ qr: qr || null });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch QR' });
   }
 });
 
@@ -795,12 +871,12 @@ app.post('/api/whatsapp/sessions/:id/disconnect', authenticateToken, async (req:
     
     // Even if sock is not found or logout fails, we clean up locally
     if (fs.existsSync(sessionDir)) {
-      fs.rmSync(sessionDir, { recursive: true, force: true });
+      try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      } catch (e) {
+        console.error(`Failed to delete session dir for ${sessionId}:`, e);
+      }
     }
-    
-    // Remove all conversations and messages for this session
-    await db.prepare('DELETE FROM conversations WHERE session_id = ?').run(sessionId);
-    await db.prepare('DELETE FROM contacts WHERE session_id = ?').run(sessionId);
     
     await db.prepare('UPDATE whatsapp_sessions SET status = ?, number = NULL WHERE id = ?').run('disconnected', sessionId);
     io.emit('connection_status', { sessionId, status: 'disconnected' });
@@ -865,8 +941,14 @@ app.get('/api/conversations', authenticateToken, async (req: any, res) => {
   try {
     let sql = `
       SELECT 
-        c.*, 
-        COALESCE(c.contact_name, (SELECT name FROM contacts WHERE jid = c.contact_number AND name IS NOT NULL LIMIT 1)) as contact_name,
+        c.*,
+        REPLACE(REPLACE(c.contact_number, '@s.whatsapp.net', ''), '@g.us', '') as clean_number,
+        COALESCE(
+          c.contact_name,
+          (SELECT name FROM contacts WHERE jid = c.contact_number AND name IS NOT NULL AND name != '' LIMIT 1),
+          (SELECT name FROM contacts WHERE number = REPLACE(REPLACE(c.contact_number, '@s.whatsapp.net', ''), '@g.us', '') AND name IS NOT NULL AND name != '' LIMIT 1),
+          REPLACE(REPLACE(c.contact_number, '@s.whatsapp.net', ''), '@g.us', '')
+        ) as contact_name,
         ws.number as session_number, 
         a.name as agent_name,
         (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_content,
@@ -1156,7 +1238,14 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: any, res) => {
     ]);
 
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      // User nahi mila — safe defaults return karo crash ki jagah
+      return res.json({
+        totalLeads: 0, qualifiedLeads: 0, conversions: 0,
+        inboxMessages: 0, activeCampaigns: 0, totalCustomers: 0,
+        tokens: 0, tokenLimit: 0, username: 'Admin', email: '',
+        memberSince: null,
+        growth: { leads: 0, qualified: 0, conversions: 0, messages: 0, campaigns: 0, customers: 0 }
+      });
     }
 
     const calculateGrowth = (current: any, totalBefore: any) => {
@@ -1275,11 +1364,24 @@ app.post('/api/system/reset-database', authenticateToken, async (req: any, res) 
   }
 
   try {
+    // Pehle sab active sessions disconnect karo
+    try {
+      const activeSessions = await db.prepare("SELECT id FROM whatsapp_sessions WHERE status = 'connected'").all() as any[];
+      for (const s of activeSessions) {
+        const sock = getSession(s.id.toString());
+        if (sock) {
+          try { await sock.logout(); } catch(e) { try { sock.end(undefined); } catch(e2) {} }
+        }
+        io.emit('session_disconnected', { sessionId: s.id });
+      }
+    } catch(e) { console.warn('Pre-reset disconnect warning:', e); }
+
     const tables = [
       'activities', 'opt_ins', 'blacklist', 'campaign_configs', 'campaign_history',
       'social_accounts', 'user_websites', 'settings', 'training_files', 'agent_rules',
       'bulk_recipients', 'bulk_campaigns', 'messages', 'leads', 'conversations',
-      'whatsapp_sessions', 'agents', 'users'
+      'whatsapp_sessions', 'agents', 'users',
+      'agent_memory', 'agent_training_chats', 'agent_rules', 'contacts'
     ];
 
     if (isMySQL) {
@@ -1312,6 +1414,56 @@ app.post('/api/system/reset-database', authenticateToken, async (req: any, res) 
   } catch (error) {
     console.error('Database reset failed:', error);
     res.status(500).json({ error: 'Failed to reset database' });
+  }
+});
+
+// Reset specific session data (messages, conversations)
+app.post('/api/system/reset-session-data', authenticateToken, async (req: any, res) => {
+  const { sessionId } = req.body;
+  if (!sessionId) return res.status(400).json({ error: 'Session ID required' });
+
+  try {
+    // Verify ownership
+    const session = await db.prepare('SELECT id FROM whatsapp_sessions WHERE id = ? AND user_id = ?').get(sessionId, req.user.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    // Delete messages and conversations
+    const conversations = await db.prepare('SELECT id FROM conversations WHERE session_id = ?').all(sessionId);
+    const convIds = conversations.map(c => c.id);
+
+    if (convIds.length > 0) {
+      const placeholders = convIds.map(() => '?').join(',');
+      await db.prepare(`DELETE FROM messages WHERE conversation_id IN (${placeholders})`).run(...convIds);
+      await db.prepare(`DELETE FROM conversations WHERE session_id = ?`).run(sessionId);
+    }
+
+    res.json({ success: true, message: 'Session data reset successfully' });
+  } catch (error) {
+    console.error('Reset session data error:', error);
+    res.status(500).json({ error: 'Failed to reset session data' });
+  }
+});
+
+// Reset specific agent training (memories, training files)
+app.post('/api/system/reset-agent-training', authenticateToken, async (req: any, res) => {
+  const { agentId } = req.body;
+  if (!agentId) return res.status(400).json({ error: 'Agent ID required' });
+
+  try {
+    // Verify ownership
+    const agent = await db.prepare('SELECT id FROM agents WHERE id = ? AND user_id = ?').get(agentId, req.user.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    // Delete training files, memories, rules, and training chats
+    await db.prepare('DELETE FROM training_files WHERE agent_id = ?').run(agentId);
+    await db.prepare('DELETE FROM agent_rules WHERE agent_id = ?').run(agentId);
+    await db.prepare('DELETE FROM agent_memory WHERE agent_id = ?').run(agentId);
+    await db.prepare('DELETE FROM agent_training_chats WHERE agent_id = ?').run(agentId);
+    
+    res.json({ success: true, message: 'Agent training reset successfully' });
+  } catch (error) {
+    console.error('Reset agent training error:', error);
+    res.status(500).json({ error: 'Failed to reset agent training' });
   }
 });
 
@@ -2036,7 +2188,12 @@ app.get('/api/campaigns/all-leads', authenticateToken, async (req: any, res) => 
       SELECT 
         c.id as conversation_id,
         c.contact_number,
-        c.contact_name,
+        COALESCE(
+          c.contact_name,
+          (SELECT name FROM contacts WHERE jid = c.contact_number AND name IS NOT NULL AND name != '' LIMIT 1),
+          REPLACE(REPLACE(c.contact_number, '@s.whatsapp.net', ''), '@g.us', '')
+        ) as contact_name,
+        REPLACE(REPLACE(c.contact_number, '@s.whatsapp.net', ''), '@g.us', '') as contact_number_clean,
         c.labels,
         c.audit_status,
         c.is_ordered,
@@ -2059,9 +2216,9 @@ app.get('/api/campaigns/all-leads', authenticateToken, async (req: any, res) => 
     // Map to the format expected by the frontend
     const formattedLeads = leads.map(l => ({
       id: l.lead_id || `conv-${l.conversation_id}`,
-      name: l.lead_name || l.contact_name || 'Unknown',
+      name: l.lead_name || l.contact_name || l.contact_number?.replace('@s.whatsapp.net','').replace('@g.us','') || 'Unknown',
       email: l.email,
-      contact_number: l.contact_number,
+      contact_number: (l.contact_number_clean || l.contact_number || '').replace('@s.whatsapp.net','').replace('@g.us',''),
       contact_name: l.contact_name,
       status: l.status,
       created_at: l.created_at,
@@ -2288,18 +2445,20 @@ httpServer.listen(PORT, '0.0.0.0', async () => {
   console.log(`Server is listening on 0.0.0.0:${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV}`);
   
-  // Reconnect previously connected sessions on startup
+  // Startup cleanup — connecting status waale sessions delete karo (incomplete sessions)
   try {
-    const connectedSessions = await db.prepare("SELECT id FROM whatsapp_sessions WHERE status = 'connected'").all() as any[];
-    console.log(`Found ${connectedSessions.length} sessions to reconnect on startup`);
-    for (const session of connectedSessions) {
-      console.log(`Attempting to reconnect session ${session.id}...`);
-      connectToWhatsApp(session.id.toString(), io).catch(err => {
-        console.error(`Failed to reconnect session ${session.id}:`, err);
-      });
+    await db.prepare("UPDATE whatsapp_sessions SET status = 'disconnected' WHERE status = 'connecting'").run();
+    
+    // Sab sessions ko disconnected state main set karo startup pe
+    // User manually connect karega as per request
+    const allSessions = await db.prepare("SELECT id FROM whatsapp_sessions").all() as any[];
+    console.log(`Setting ${allSessions.length} sessions to disconnected on startup`);
+    
+    for (const session of allSessions) {
+      await db.prepare("UPDATE whatsapp_sessions SET status = 'disconnected' WHERE id = ?").run(session.id);
     }
   } catch (error) {
-    console.error('Error during session reconnection startup:', error);
+    console.error('Error during session cleanup startup:', error);
   }
 }).on('error', (err) => {
   console.error('Server failed to start:', err);

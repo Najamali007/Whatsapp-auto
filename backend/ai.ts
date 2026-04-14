@@ -25,7 +25,7 @@ export async function validateGeminiKey(apiKey: string) {
     const ai = new GoogleGenAI({ apiKey });
     // Use a tiny prompt to validate the key
     await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-1.5-flash",
       contents: "hi",
       config: { maxOutputTokens: 1 }
     });
@@ -64,7 +64,7 @@ export async function validateDeepSeekKey(apiKey: string) {
 }
 
 export async function callAI(userId: number, prompt: string, systemInstruction?: string, media?: any) {
-  console.log('AI Engine v1.1 starting...');
+  console.log(`AI Engine v1.1 starting for user ${userId}...`);
   const keys = await getActiveApiKeys(userId);
   
   const providersToTry: { id: string, key: string, dbId?: number, source: string }[] = [];
@@ -95,6 +95,8 @@ export async function callAI(userId: number, prompt: string, systemInstruction?:
   if (DEFAULT_KEYS.deepseek && DEFAULT_KEYS.deepseek.length > 10) {
     providersToTry.push({ id: 'deepseek', key: DEFAULT_KEYS.deepseek, source: 'Default' });
   }
+
+  console.log(`Providers to try: ${providersToTry.map(p => `${p.id} (${p.source})`).join(', ')}`);
 
   let lastError = null;
   for (const provider of providersToTry) {
@@ -147,7 +149,7 @@ async function callGemini(apiKey: string, prompt: string, systemInstruction?: st
   try {
     const ai = new GoogleGenAI({ apiKey });
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-1.5-flash",
       contents: prompt,
       config: {
         systemInstruction: systemInstruction,
@@ -500,4 +502,187 @@ export async function generateFollowupMessage(userId: number, leadName: string, 
     console.error('Follow-up generation failed:', error);
     return `Hi ${leadName}, I wanted to follow up on our previous conversation. Do you have any further questions or would you like to schedule a call?`;
   }
+}
+
+
+// ============================================================
+// AGENT MEMORY SYSTEM — Claude-style persistent memory
+// ============================================================
+
+export async function trainAgentWithChat(
+  userId: number,
+  agentId: number,
+  userMessage: string,
+  chatHistory: { role: string; content: string }[]
+): Promise<string> {
+  const agent = await db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId) as any;
+  if (!agent) throw new Error('Agent not found');
+
+  // Load all existing memories
+  const memories = await db.prepare(
+    'SELECT topic, content, source FROM agent_memory WHERE agent_id = ? ORDER BY updated_at DESC'
+  ).all(agentId) as any[];
+
+  const memoryContext = memories.length > 0
+    ? memories.map((m: any) => `${m.topic}: ${m.content}`).join('\n')
+    : 'No training yet.';
+
+  const recentChats = chatHistory.slice(-10);
+
+  const systemPrompt = `You are ${agent.name || 'an AI assistant'} — being trained right now by your owner.
+
+YOUR IDENTITY:
+- Name: ${agent.name}
+- Company: ${agent.brand_company || 'N/A'}
+- Service: ${agent.product_service || 'N/A'}
+- Goal: ${agent.objective || 'Help clients professionally'}
+
+CURRENT MEMORY (what you already know):
+${memoryContext}
+
+TRAINING CONVERSATION:
+${recentChats.map((m: any) => `${m.role === 'user' ? 'Owner' : 'You'}: ${m.content}`).join('\n')}
+
+RULES FOR THIS TRAINING SESSION:
+- Owner is teaching you — confirm clearly what you learned
+- If given Q&A rule ("if X, say Y") — repeat it back to confirm
+- If given links/files/portfolios — confirm exact name/URL you'll remember
+- Answer in same language as owner (Urdu/English)
+- Keep confirmations SHORT — "Got it, I'll remember: [what you learned]"
+- NEVER make up info not in your memory
+- If info contradicts old memory — confirm the UPDATE: "Updated! I'll now use [new info] instead of [old info]"`;
+
+  const response = await callAI(userId, userMessage, systemPrompt);
+  await extractAndStoreMemory(userId, agentId, userMessage, response);
+  return response;
+}
+
+async function extractAndStoreMemory(
+  userId: number,
+  agentId: number,
+  userMessage: string,
+  agentResponse: string
+): Promise<void> {
+  const extractPrompt = `Extract key knowledge from this training message to store permanently.
+
+Trainer said: "${userMessage}"
+
+Rules for extraction:
+- If it contains a link (http/https) — topic: "link_[description]", content: the full URL
+- If it contains a file name or portfolio — topic: "portfolio_[person_name]", content: exact filename/link
+- If it's a Q&A instruction ("if asked X, say Y") — topic: "qa_[keyword]", content: full instruction
+- If it's product/pricing info — topic: "pricing" or "product_info", content: exact info
+- If it's a greeting/style rule — topic: "communication_style", content: the rule
+- action: "store" for new, "update" if topic likely exists, "skip" if just casual chat
+
+Respond ONLY in JSON:
+{
+  "memories": [
+    {"topic": "...", "content": "...", "action": "store|update|skip"}
+  ]
+}`;
+
+  try {
+    const result = await callAI(userId, extractPrompt, '');
+    const jsonMatch = result.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return;
+
+    const data = JSON.parse(jsonMatch[0]);
+    
+    for (const mem of (data.memories || [])) {
+      if (mem.action === 'skip' || !mem.topic || !mem.content) continue;
+
+      // Exact topic match check
+      const existing = await db.prepare(
+        'SELECT id, content FROM agent_memory WHERE agent_id = ? AND topic = ?'
+      ).get(agentId, mem.topic) as any;
+
+      if (existing) {
+        // Same content — skip (no duplication)
+        if (existing.content.trim() === mem.content.trim()) continue;
+        
+        // New content — archive old, store new as latest
+        // Old info ko prev_content mein rakhte hain (future reference)
+        await db.prepare(
+          'UPDATE agent_memory SET content = ?, prev_content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+        ).run(mem.content, existing.content, existing.id).catch(async () => {
+          // prev_content column na ho to sirf update karo
+          await db.prepare('UPDATE agent_memory SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(mem.content, existing.id);
+        });
+      } else {
+        // New topic — store
+        await db.prepare(
+          'INSERT INTO agent_memory (agent_id, topic, content, source) VALUES (?, ?, ?, ?)'
+        ).run(agentId, mem.topic, mem.content, 'chat');
+      }
+    }
+  } catch (err) {
+    console.error('Memory extraction failed:', err);
+  }
+}
+
+export async function trainAgentWithDocument(
+  userId: number,
+  agentId: number,
+  documentContent: string,
+  filename: string
+): Promise<string> {
+  const agent = await db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId) as any;
+  if (!agent) throw new Error('Agent not found');
+
+  // Extract structured knowledge from document
+  const extractPrompt = `You are processing a training document for an AI agent.
+  
+Document: "${filename}"
+Content:
+${documentContent.substring(0, 8000)}
+
+Extract ALL important knowledge as structured memories.
+Respond ONLY in JSON:
+{
+  "summary": "one line summary of what this document teaches",
+  "memories": [
+    {"topic": "short label", "content": "exact info to remember"}
+  ]
+}`;
+
+  const result = await callAI(userId, extractPrompt, '');
+  const jsonMatch = result.match(/\{[\s\S]*\}/);
+  
+  if (jsonMatch) {
+    const data = JSON.parse(jsonMatch[0]);
+    
+    for (const mem of (data.memories || [])) {
+      if (!mem.topic || !mem.content) continue;
+      
+      const existing = await db.prepare(
+        'SELECT id FROM agent_memory WHERE agent_id = ? AND topic = ?'
+      ).get(agentId, mem.topic) as any;
+
+      if (existing) {
+        await db.prepare(
+          'UPDATE agent_memory SET content = ?, source = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+        ).run(mem.content, 'document', existing.id);
+      } else {
+        await db.prepare(
+          'INSERT INTO agent_memory (agent_id, topic, content, source) VALUES (?, ?, ?, ?)'
+        ).run(agentId, mem.topic, mem.content, 'document');
+      }
+    }
+    
+    return data.summary || `Document "${filename}" has been processed and stored in memory.`;
+  }
+  
+  return `Document "${filename}" processed successfully.`;
+}
+
+export async function getAgentMemory(agentId: number): Promise<any[]> {
+  return await db.prepare(
+    'SELECT * FROM agent_memory WHERE agent_id = ? ORDER BY updated_at DESC'
+  ).all(agentId) as any[];
+}
+
+export async function deleteAgentMemory(memoryId: number, agentId: number): Promise<void> {
+  await db.prepare('DELETE FROM agent_memory WHERE id = ? AND agent_id = ?').run(memoryId, agentId);
 }

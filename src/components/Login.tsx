@@ -66,7 +66,7 @@ export default function Login({ onLogin }: LoginProps) {
             WhatsApp Auto
           </h1>
           <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest mt-1">
-            Created by OnDigix
+            Created by Ondigix
           </p>
         </div>
 

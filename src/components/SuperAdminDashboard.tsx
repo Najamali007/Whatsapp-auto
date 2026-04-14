@@ -137,7 +137,7 @@ export default function SuperAdminDashboard() {
     doc.setTextColor(100);
     doc.text(`Administrator: ${admin.username}`, 14, 30);
     doc.text(`Export Date: ${timestamp}`, 14, 37);
-    doc.text(`Created by OnDigix`, 14, 44);
+    doc.text(`Created by Ondigix`, 14, 44);
 
     try {
       // Fetch Leads for this admin

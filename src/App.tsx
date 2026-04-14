@@ -18,6 +18,8 @@ import SuperAdminDashboard from './components/SuperAdminDashboard';
 import SuperAdminOverview from './components/SuperAdminOverview';
 import TokenTopupModal from './components/TokenTopupModal';
 import socket from './lib/socket';
+import { loadingManager } from './lib/loading';
+import SyncPopup from './components/SyncPopup';
 
 export default function App() {
   const [token, setToken] = useState<string | null>(() => {
@@ -29,8 +31,33 @@ export default function App() {
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
   const [isSuperAdminPath] = useState(() => window.location.pathname === '/super-admin');
   const [showTokenModal, setShowTokenModal] = useState(false);
+  const [syncPopupData, setSyncPopupData] = useState<{ sessionId: number; name: string; progress: number; message: string } | null>(null);
+
+  const handleLogin = (newToken: string) => {
+    setToken(newToken);
+    localStorage.setItem('token', newToken);
+  };
+
+  const handleLogout = () => {
+    setToken(null);
+    localStorage.removeItem('token');
+    localStorage.removeItem('user_role');
+  };
 
   useEffect(() => {
+    socket.on('sync_status', ({ sessionId, sessionName, status, progress, message }) => {
+      if (status === 'syncing') {
+        setSyncPopupData({ sessionId, name: sessionName || 'WhatsApp', progress: progress || 0, message: message || 'Syncing...' });
+      } else if (status === 'completed') {
+        setSyncPopupData(prev => prev?.sessionId === sessionId ? { ...prev, progress: 100, message: 'Sync complete!' } : prev);
+        setTimeout(() => {
+          setSyncPopupData(prev => prev?.sessionId === sessionId ? null : prev);
+        }, 5000);
+      } else if (status === 'error') {
+        setSyncPopupData(null);
+      }
+    });
+
     socket.on('token_limit_reached', () => {
       const userRole = localStorage.getItem('user_role');
       if (userRole !== 'super_admin') {
@@ -46,36 +73,32 @@ export default function App() {
       window.location.reload();
     });
 
+    const handleNavigate = (e: any) => {
+      setActiveTab(e.detail);
+    };
+    window.addEventListener('navigate_to_tab', handleNavigate);
+
+    const handleUnauthorized = () => {
+      handleLogout();
+    };
+    window.addEventListener('unauthorized', handleUnauthorized);
+
     return () => {
       socket.off('token_limit_reached');
       socket.off('navigate_to_tab');
       socket.off('force_refresh');
+      window.removeEventListener('navigate_to_tab', handleNavigate);
+      window.removeEventListener('unauthorized', handleUnauthorized);
     };
   }, []);
 
-  const handleLogin = (newToken: string) => {
-    setToken(newToken);
-    localStorage.setItem('token', newToken);
-  };
-
-  const handleLogout = () => {
-    setToken(null);
-    localStorage.removeItem('token');
-    localStorage.removeItem('user_role');
-  };
-
-  if (!token) {
-    return (
-      <>
-        {isSuperAdminPath ? (
-          <SuperAdminLogin onLogin={handleLogin} />
-        ) : (
-          <Login onLogin={handleLogin} />
-        )}
-        <LoadingOverlay />
-      </>
-    );
-  }
+  useEffect(() => {
+    // Hide initial loader
+    const timer = setTimeout(() => {
+      loadingManager.setLoading(false);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, []);
 
   const userRole = localStorage.getItem('user_role');
 
@@ -110,30 +133,58 @@ export default function App() {
   };
 
   return (
-    <>
-      <Layout 
-        activeTab={activeTab} 
-        setActiveTab={(tab) => {
-          setActiveTab(tab);
-          if (tab === 'agents') setSelectedAgentId(null);
-        }} 
-        onLogout={handleLogout}
-      >
-        <AnimatePresence mode="wait">
+    <div className="h-screen w-full overflow-hidden bg-[#F8F9FB]">
+      <AnimatePresence mode="wait">
+        {!token ? (
           <motion.div
-            key={activeTab}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-            className="h-full"
+            key="login"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="h-full w-full"
           >
-            {renderContent()}
+            {isSuperAdminPath ? (
+              <SuperAdminLogin onLogin={handleLogin} />
+            ) : (
+              <Login onLogin={handleLogin} />
+            )}
           </motion.div>
-        </AnimatePresence>
-      </Layout>
+        ) : (
+          <motion.div
+            key="app"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="h-full w-full"
+          >
+            <Layout 
+              activeTab={activeTab} 
+              onTabChange={(tab: string) => {
+                setActiveTab(tab);
+                if (tab === 'agents') setSelectedAgentId(null);
+              }} 
+              onLogout={handleLogout}
+              userRole={userRole}
+            >
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={activeTab}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.2, ease: "easeOut" }}
+                  className="h-full"
+                >
+                  {renderContent()}
+                </motion.div>
+              </AnimatePresence>
+            </Layout>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <TokenTopupModal isOpen={showTokenModal} onClose={() => setShowTokenModal(false)} />
+      <SyncPopup data={syncPopupData} onClose={() => setSyncPopupData(null)} />
       <LoadingOverlay />
-    </>
+    </div>
   );
 }

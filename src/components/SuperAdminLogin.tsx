@@ -59,7 +59,7 @@ export default function SuperAdminLogin({ onLogin }: SuperAdminLoginProps) {
             WhatsApp Auto
           </h1>
           <p className="text-indigo-400 text-[10px] font-black uppercase tracking-widest mt-1">
-            Created by OnDigix
+            Created by Ondigix
           </p>
         </div>
 

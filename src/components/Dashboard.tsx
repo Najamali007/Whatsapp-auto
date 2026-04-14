@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   Users, 
@@ -54,6 +54,15 @@ export default function Dashboard({ token }: DashboardProps) {
   const [showTokenAddedModal, setShowTokenAddedModal] = useState(false);
   const [lastTokenCount, setLastTokenCount] = useState<number | null>(null);
 
+  const kpiCards = useMemo(() => [
+    { label: 'Total Leads', value: stats?.totalLeads || 0, growth: stats?.growth?.leads || 0, icon: Users, color: 'primary' },
+    { label: 'Qualified Leads', value: stats?.qualifiedLeads || 0, growth: stats?.growth?.qualified || 0, icon: UserCheck, color: 'emerald' },
+    { label: 'Conversions', value: stats?.conversions || 0, growth: stats?.growth?.conversions || 0, icon: Target, color: 'purple' },
+    { label: 'Inbox Messages', value: stats?.inboxMessages || 0, growth: stats?.growth?.messages || 0, icon: MessageSquare, color: 'blue' },
+    { label: 'Active Campaigns', value: stats?.activeCampaigns || 0, growth: stats?.growth?.campaigns || 0, icon: Send, color: 'orange' },
+    { label: 'Total Customers', value: stats?.totalCustomers || 0, growth: stats?.growth?.customers || 0, icon: Database, color: 'pink' },
+  ], [stats]);
+
   useEffect(() => {
     const isModalOpen = showDetailedAnalytics || showTokenEndedModal || showTokenAddedModal;
     const event = new CustomEvent('toggle-modal-blur', { 
@@ -88,7 +97,8 @@ export default function Dashboard({ token }: DashboardProps) {
       setError(null);
     } catch (error: any) {
       console.error('Failed to fetch dashboard data:', error);
-      setError('Failed to load dashboard data. Please check your connection.');
+      const errorMessage = error.message || 'Failed to load dashboard data.';
+      setError(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -118,14 +128,20 @@ export default function Dashboard({ token }: DashboardProps) {
     );
   }
 
-  const kpiCards = [
-    { label: 'Total Leads', value: stats?.totalLeads || 0, growth: stats?.growth?.leads || 0, icon: Users, color: 'primary' },
-    { label: 'Qualified Leads', value: stats?.qualifiedLeads || 0, growth: stats?.growth?.qualified || 0, icon: UserCheck, color: 'emerald' },
-    { label: 'Conversions', value: stats?.conversions || 0, growth: stats?.growth?.conversions || 0, icon: Target, color: 'purple' },
-    { label: 'Inbox Messages', value: stats?.inboxMessages || 0, growth: stats?.growth?.messages || 0, icon: MessageSquare, color: 'blue' },
-    { label: 'Active Campaigns', value: stats?.activeCampaigns || 0, growth: stats?.growth?.campaigns || 0, icon: Send, color: 'orange' },
-    { label: 'Total Customers', value: stats?.totalCustomers || 0, growth: stats?.growth?.customers || 0, icon: Database, color: 'pink' },
-  ];
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] text-center space-y-4">
+        <AlertCircle className="w-12 h-12 text-red-500" />
+        <p className="text-gray-900 font-bold">{error}</p>
+        <button 
+          onClick={fetchData}
+          className="bg-primary text-white px-6 py-2 rounded-xl text-sm font-bold shadow-lg shadow-primary/20 hover:bg-primary-hover transition-all"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-12 pb-12">
@@ -227,7 +243,7 @@ export default function Dashboard({ token }: DashboardProps) {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-8">
         {kpiCards.map((card, i) => (
           <motion.div
-            key={i}
+            key={`kpi-${card.label}`}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: i * 0.05 }}
@@ -252,6 +268,33 @@ export default function Dashboard({ token }: DashboardProps) {
           </motion.div>
         ))}
       </div>
+
+      {/* Channel Management Quick Access */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-white border border-gray-100 rounded-[3rem] p-8 shadow-sm flex flex-col md:flex-row items-center justify-between gap-8"
+      >
+        <div className="flex items-center gap-6">
+          <div className="w-20 h-20 bg-primary/10 rounded-[2rem] flex items-center justify-center shadow-lg shadow-primary/10">
+            <Database className="w-10 h-10 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-2xl font-black text-gray-900 tracking-tight">Channel Management</h2>
+            <p className="text-gray-500 text-sm font-medium mt-1">Connect and manage your WhatsApp, Facebook, and Instagram communication channels.</p>
+          </div>
+        </div>
+        <button
+          onClick={() => {
+            const event = new CustomEvent('navigate_to_tab', { detail: 'whatsapp' });
+            window.dispatchEvent(event);
+          }}
+          className="px-8 py-4 bg-gray-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-primary transition-all shadow-xl shadow-gray-900/10 flex items-center gap-3 group"
+        >
+          Manage All Channels
+          <ArrowUpRight className="w-4 h-4 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+        </button>
+      </motion.div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
         {/* Main Growth Chart */}
@@ -361,7 +404,7 @@ export default function Dashboard({ token }: DashboardProps) {
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {systemStatus && Object.entries(systemStatus).map(([key, value]: [string, any]) => (
-              <div key={key} className="p-6 rounded-[2rem] bg-gray-50 border border-gray-100">
+              <div key={`system-status-${key}`} className="p-6 rounded-[2rem] bg-gray-50 border border-gray-100">
                 <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">{value.label}</p>
                 <div className="flex items-center gap-3">
                   <div className={`w-3 h-3 rounded-full animate-pulse ${
@@ -478,13 +521,24 @@ export default function Dashboard({ token }: DashboardProps) {
               </div>
 
               <div className="space-y-4">
-                <h4 className="text-lg font-black text-gray-900 uppercase tracking-tight">Channel Performance</h4>
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-lg font-black text-gray-900 uppercase tracking-tight">Channel Performance</h4>
+                  <button 
+                    onClick={() => {
+                      const event = new CustomEvent('navigate_to_tab', { detail: 'whatsapp' });
+                      window.dispatchEvent(event);
+                    }}
+                    className="text-[10px] font-black text-primary uppercase tracking-widest hover:underline"
+                  >
+                    Manage Channels
+                  </button>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {[
                     { label: 'WhatsApp', value: stats?.totalLeads || 0, status: 'Active' },
                     { label: 'Bulk Campaigns', value: stats?.activeCampaigns || 0, status: 'Running' },
-                  ].map((item, i) => (
-                    <div key={i} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                  ].map((item) => (
+                    <div key={`channel-perf-${item.label}`} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
                       <div>
                         <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{item.label}</p>
                         <p className="text-sm font-black text-gray-900">{item.value}</p>

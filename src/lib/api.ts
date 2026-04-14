@@ -24,42 +24,72 @@ async function _apiFetch(url: string, options: RequestInit = {}, onLogout?: () =
     headers['Content-Type'] = 'application/json';
   }
 
-  try {
-    const fullUrl = url.startsWith('http') ? url : `${window.location.origin}${url}`;
-    const response = await fetch(fullUrl, { ...options, headers }).catch(err => {
-      console.error(`Fetch execution error for ${fullUrl}:`, err);
-      throw err;
-    });
-    
-    if (response.status === 401 || response.status === 403) {
-      localStorage.removeItem('token');
-      if (onLogout) {
-        onLogout();
+  const maxRetries = 3;
+  let lastError: any;
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const fullUrl = url;
+      console.log(`[apiFetch] Fetching ${fullUrl}... (Attempt ${i + 1})`);
+      const response = await fetch(fullUrl, { ...options, headers });
+      
+      if (response.status === 401 || response.status === 403) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user_role');
+        window.dispatchEvent(new CustomEvent('unauthorized'));
+        if (onLogout) {
+          onLogout();
+        } else {
+          // Fallback if no onLogout provided
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+          }
+        }
+        throw new Error('Unauthorized');
+      }
+
+      const contentType = response.headers.get('content-type');
+      const isJson = contentType && contentType.includes('application/json');
+
+      if (!response.ok) {
+        let errorMessage = `HTTP error! status: ${response.status}`;
+        if (isJson) {
+          const errorData = await response.json().catch(() => ({}));
+          errorMessage = errorData.error || errorMessage;
+        } else {
+          const text = await response.text().catch(() => '');
+          console.warn(`[apiFetch] Non-JSON error response from ${url}:`, text.substring(0, 100));
+        }
+        
+        if (errorMessage === 'The API token has been reached. Kindly update your API.') {
+          loadingManager.setError(errorMessage);
+        }
+        
+        throw new Error(errorMessage);
+      }
+
+      if (isJson) {
+        return await response.json();
       } else {
-        window.location.reload();
+        const text = await response.text();
+        console.warn(`[apiFetch] Expected JSON but got ${contentType} from ${url}`);
+        if (text.trim().startsWith('<!doctype html>') || text.trim().startsWith('<html>')) {
+          throw new Error(`Server returned HTML instead of JSON for ${url}. This usually means the route was not found.`);
+        }
+        return text;
       }
-      throw new Error('Unauthorized');
-    }
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const errorMessage = errorData.error || `HTTP error! status: ${response.status}`;
+    } catch (error: any) {
+      lastError = error;
+      if (error.message === 'Unauthorized') throw error;
       
-      if (errorMessage === 'The API token has been reached. Kindly update your API.') {
-        loadingManager.setError(errorMessage);
+      console.error(`Fetch attempt ${i + 1} failed for ${url}:`, error);
+      if (i < maxRetries - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
       }
-      
-      throw new Error(errorMessage);
     }
-
-    return await response.json();
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('Unauthorized')) {
-      throw error;
-    }
-    console.error(`API Fetch Error (${url}):`, error);
-    throw error;
   }
+
+  throw lastError;
 }
 
 export async function apiFetch(url: string, options: RequestInit & { heavy?: boolean } = {}, onLogout?: () => void) {
