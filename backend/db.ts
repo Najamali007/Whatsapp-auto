@@ -297,6 +297,18 @@ async function initDb() {
         table.float('engagement_score').defaultTo(0);
       });
     }
+    const hasLastMessage = await dbProxy.schema.hasColumn('conversations', 'last_message');
+    if (!hasLastMessage) {
+      await dbProxy.schema.table('conversations', (table) => {
+        table.text('last_message');
+      });
+    }
+    const hasProfilePicConv = await dbProxy.schema.hasColumn('conversations', 'profile_pic');
+    if (!hasProfilePicConv) {
+      await dbProxy.schema.table('conversations', (table) => {
+        table.text('profile_pic');
+      });
+    }
   }
 
   const hasLeads = await dbProxy.schema.hasTable('leads');
@@ -434,9 +446,17 @@ async function initDb() {
       table.string('jid').notNullable();
       table.string('name');
       table.string('number');
+      table.text('profile_pic');
       table.timestamp('created_at').defaultTo(dbProxy.fn.now());
       table.unique(['session_id', 'jid']);
     });
+  } else {
+    const hasProfilePic = await dbProxy.schema.hasColumn('contacts', 'profile_pic');
+    if (!hasProfilePic) {
+      await dbProxy.schema.table('contacts', (table) => {
+        table.text('profile_pic');
+      });
+    }
   }
 
   const hasAgentRules = await dbProxy.schema.hasTable('agent_rules');

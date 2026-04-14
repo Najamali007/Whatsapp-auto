@@ -309,6 +309,17 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer, f
         // Update by both full JID and number-only to catch all formats
         await db.prepare('UPDATE conversations SET contact_name = ? WHERE session_id = ? AND (contact_number = ? OR contact_number = ?)').run(name, sessionId, contact.id, number);
       }
+
+      // Fetch profile picture
+      if (!contact.id.endsWith('@g.us')) {
+        try {
+          const ppUrl = await sock.profilePictureUrl(contact.id, 'image').catch(() => null);
+          if (ppUrl) {
+            await db.prepare('UPDATE contacts SET profile_pic = ? WHERE session_id = ? AND jid = ?').run(ppUrl, sessionId, contact.id);
+            await db.prepare('UPDATE conversations SET profile_pic = ? WHERE session_id = ? AND contact_number = ?').run(ppUrl, sessionId, contact.id);
+          }
+        } catch (e) {}
+      }
     }
   });
 
@@ -569,8 +580,8 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
       .run(conversation.id, msg.key.fromMe ? 'agent' : 'contact', text, type, timestamp, (msg as any).transcription || null);
     const messageId = msgResult.lastInsertRowid;
     
-    await db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?')
-      .run(timestamp, conversation.id);
+    await db.prepare('UPDATE conversations SET last_message_at = ?, last_message = ? WHERE id = ?')
+      .run(timestamp, text || '', conversation.id);
 
     // Emit event for real-time updates
     if (shouldEmit) {
@@ -914,6 +925,15 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     const recentAgentMessages = conversationHistory.filter(m => m.sender === 'agent').slice(-5);
     const alreadyGreeted = recentAgentMessages.length > 0;
 
+    // Check if agent already greeted today specifically
+    const todayGreetCheck = await db.prepare(`
+      SELECT content FROM messages 
+      WHERE conversation_id = ? AND sender = 'agent' 
+      AND date(created_at) = date('now')
+      ORDER BY created_at ASC LIMIT 1
+    `).get(conversation.id) as any;
+    const greetedToday = !!todayGreetCheck;
+
     // Last agent message — context ke liye
     const lastAgentMsg = recentAgentMessages[recentAgentMessages.length - 1];
     
@@ -1058,8 +1078,8 @@ ${stageInstruction}
 ${intentInstruction}
 ${lastAgentAskedQuestion ? `Your last message asked a question. Client just answered it. Now give relevant details — do NOT repeat the question.` : ''}
 ${isAck ? `Client said ok/thanks — reply "You're welcome! 😊" and nothing else.` : ''}
-${(isNewDay && !userIsAsking) ? `First message of the day — briefly greet as ${agent.name} from ${agent.brand_company || 'our company'}, then answer.` : `Ongoing chat — NO greeting at all. Jump straight to the answer.`}
-${isReturningAfterLongTime && !isNewDay && !userIsAsking ? `Client back after 5+ hours — brief warm welcome, then answer.` : ''}
+${(!alreadyGreeted && !greetedToday) ? `VERY FIRST reply to this client — greet briefly as ${agent.name} from ${agent.brand_company || 'our company'}, then answer their message.` : `ONGOING CHAT — absolutely NO greeting, NO "Hi [name]", NO "thanks for reaching out", NO "I saw you replied". Jump DIRECTLY to answering what they just said.`}
+${isReturningAfterLongTime && alreadyGreeted && !greetedToday ? `Client returning after 5+ hours — one warm sentence, then answer.` : ''}
 
 ═══════════════════════════════
 BANNED PHRASES — NEVER USE THESE:
@@ -1110,14 +1130,23 @@ BEFORE SENDING, CHECK:
       "how can i assist you today",
       "i am here to help",
       "i saw your message",
-      "hi ondigix",
-      "i saw you replied. how can i help?"
+      "i saw you replied. how can i help?",
+      "thanks for reaching out",
+      "thank you for reaching out",
+      "thank you for contacting",
+      "thanks for contacting",
+      "how may i help you",
+      "how may i assist you",
+      "hope you are doing well",
     ];
 
     const lowerResponse = aiResponse.toLowerCase().trim();
-    
+
+    // Block repeated "Hi [name]" greetings if agent already replied before
+    const nameGreetingPattern = alreadyGreeted && new RegExp(`^hi\\s+${clientName.toLowerCase()}`).test(lowerResponse);
+
     // Block if it contains robotic meta-commentary
-    const containsRoboticPhrase = roboticPhrases.some(phrase => lowerResponse.includes(phrase));
+    const containsRoboticPhrase = nameGreetingPattern || roboticPhrases.some(phrase => lowerResponse.includes(phrase));
 
     const isDuplicate = containsRoboticPhrase || recentAgentMessages.some(m => {
       const s1 = lowerResponse;
