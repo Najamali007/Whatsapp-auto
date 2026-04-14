@@ -1078,11 +1078,11 @@ ${stageInstruction}
 ${intentInstruction}
 ${lastAgentAskedQuestion ? `Your last message asked a question. Client just answered it. Now give relevant details — do NOT repeat the question.` : ''}
 ${isAck ? `Client said ok/thanks — reply "You're welcome! 😊" and nothing else.` : ''}
-${(!alreadyGreeted && !greetedToday) ? `VERY FIRST reply to this client — greet briefly as ${agent.name} from ${agent.brand_company || 'our company'}, then answer their message.` : `ONGOING CHAT — absolutely NO greeting, NO "Hi [name]", NO "thanks for reaching out", NO "I saw you replied". Jump DIRECTLY to answering what they just said.`}
-${isReturningAfterLongTime && alreadyGreeted && !greetedToday ? `Client returning after 5+ hours — one warm sentence, then answer.` : ''}
+STRICT RULE: NO GREETINGS. Do NOT say "Hi", "Hello", "Assalam-o-Alaikum", "Hey", or use the client's name at the start. Jump DIRECTLY to answering the client's message.
 
 ═══════════════════════════════
 BANNED PHRASES — NEVER USE THESE:
+- "Hi", "Hello", "Hey", "Assalam-o-Alaikum"
 - "Thanks for reaching out"
 - "How can I help you today?"
 - "I saw you replied" / "I noticed you replied"
@@ -1091,7 +1091,8 @@ BANNED PHRASES — NEVER USE THESE:
 - "Hope this helps"
 - "Certainly!" / "Great question!"
 - "Thank you for contacting us"
-- Any repeated greeting if already greeted in history
+- "How can I assist you?"
+- "I'm [Name] from [Company]" (unless explicitly asked who you are)
 
 ═══════════════════════════════
 ANTI-REPETITION — CRITICAL:
@@ -1138,6 +1139,11 @@ BEFORE SENDING, CHECK:
       "how may i help you",
       "how may i assist you",
       "hope you are doing well",
+      "assalam-o-alaikum",
+      "assalam o alaikum",
+      "hi ",
+      "hello ",
+      "hey ",
     ];
 
     const lowerResponse = aiResponse.toLowerCase().trim();

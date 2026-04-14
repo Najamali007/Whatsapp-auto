@@ -74,6 +74,10 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
   const [activeTrainTab, setActiveTrainTab] = useState<'chat' | 'document' | null>(null);
   const [hasApiKeys, setHasApiKeys] = useState<boolean>(true);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importJson, setImportJson] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
+  const [exportSuccess, setExportSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
@@ -266,6 +270,56 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
     } catch (e) {}
   };
 
+  const handleExport = () => {
+    if (!selectedAgentId) return;
+    const agent = agents.find(a => a.id === selectedAgentId);
+    if (!agent) return;
+
+    const exportData = {
+      name: agent.name,
+      personality: agent.personality,
+      role: agent.role,
+      knowledge_base: agent.knowledge_base,
+      brand_company: agent.brand_company,
+      product_service: agent.product_service,
+      objective: agent.objective,
+      tone: agent.tone,
+      playbook: agent.playbook,
+      others: agent.others,
+      avatar: agent.avatar,
+      strategy: agent.strategy,
+      agent_config: agent.agent_config
+    };
+
+    navigator.clipboard.writeText(JSON.stringify(exportData, null, 2));
+    setExportSuccess(true);
+    setTimeout(() => setExportSuccess(false), 3000);
+  };
+
+  const handleImport = async () => {
+    if (!importJson.trim()) return;
+    setIsImporting(true);
+    try {
+      const data = JSON.parse(importJson);
+      const response = await apiFetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      
+      if (response.id) {
+        setSelectedAgentId(response.id);
+        fetchAgents();
+        setShowImportModal(false);
+        setImportJson('');
+      }
+    } catch (error: any) {
+      alert('Invalid JSON format: ' + error.message);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   // ── Services Builder helpers ──────────────────────────────
   const addService = () => {
     const id = `svc_${Date.now()}`;
@@ -360,7 +414,11 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
             )}
           </div>
           {/* Create New */}
-          <div className="p-3 border-t border-gray-100">
+          <div className="p-3 border-t border-gray-100 space-y-2">
+            <button onClick={() => setShowImportModal(true)}
+              className="w-full py-3 bg-white border border-gray-200 text-gray-600 rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-gray-50 transition-all">
+              <Upload className="w-4 h-4" /> Import Agent
+            </button>
             <button onClick={() => setSelectedAgentId(null)}
               className="w-full py-3 bg-primary text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-primary/20">
               <Plus className="w-4 h-4" /> New Agent
@@ -657,7 +715,13 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                   </div>
 
                   {/* Save */}
-                  <div className="flex justify-end">
+                  <div className="flex justify-end items-center gap-4">
+                    {selectedAgentId && (
+                      <button onClick={handleExport}
+                        className={`px-6 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl transition-all flex items-center gap-2 ${exportSuccess ? 'bg-emerald-500 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+                        {exportSuccess ? <><Check className="w-4 h-4" /> Copied!</> : <><Layers className="w-4 h-4" /> Export JSON</>}
+                      </button>
+                    )}
                     <button onClick={() => handleSave(selectedAgentId)}
                       className={`px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl transition-all flex items-center gap-2 ${saveSuccess ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white hover:bg-primary'}`}>
                       {saveSuccess ? <><Check className="w-4 h-4" /> Saved!</> : <><RefreshCw className="w-4 h-4" /> Save Config</>}
@@ -772,6 +836,46 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
 
         </div>
       </div>
+
+      {/* Import Modal */}
+      <AnimatePresence>
+        {showImportModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setShowImportModal(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl overflow-hidden">
+              <div className="p-8">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-2xl font-black text-gray-900">Import Agent</h3>
+                  <button onClick={() => setShowImportModal(false)} className="p-2 hover:bg-gray-100 rounded-xl transition-all">
+                    <X className="w-6 h-6 text-gray-400" />
+                  </button>
+                </div>
+                <p className="text-gray-500 text-sm mb-6 font-medium">Paste the agent JSON data below to recreate it exactly.</p>
+                <textarea
+                  value={importJson}
+                  onChange={(e) => setImportJson(e.target.value)}
+                  placeholder='Paste JSON here...'
+                  className="w-full h-64 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-xs font-mono outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+                />
+                <div className="mt-8 flex gap-4">
+                  <button onClick={() => setShowImportModal(false)}
+                    className="flex-1 py-4 rounded-2xl font-black uppercase tracking-widest text-xs border border-gray-200 text-gray-600 hover:bg-gray-50 transition-all">
+                    Cancel
+                  </button>
+                  <button onClick={handleImport} disabled={isImporting || !importJson.trim()}
+                    className="flex-1 py-4 bg-primary text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-primary/20 hover:bg-primary/90 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                    {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    Import Agent
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
