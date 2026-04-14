@@ -108,9 +108,9 @@ async function initDb() {
   }
 
   // Insert default super admin if not exists
-  const superAdminUsername = 'najam786ali@yahoo.com';
+  const superAdminUsername = 'admin@ondigix.com';
   const superAdminPassword = 'Password';
-  const superAdminKey = 'Najam2712ali';
+  const superAdminKey = 'Ondigix2026';
   
   const superAdmin = await dbProxy('users').where({ username: superAdminUsername }).first();
   if (!superAdmin) {

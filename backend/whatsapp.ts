@@ -1042,7 +1042,7 @@ YOUR KNOWLEDGE (use this to answer — highest priority):
 ${memoryData || 'Use your identity info above.'}
 ${trainingData ? `TRAINING DOCS:\n${trainingData}` : ''}
 ${configContext}
-${detectedService ? `DETECTED SERVICE: Client is asking about "${detectedService.name}".${detectedService.ask_for ? ` Ask them for their ${detectedService.ask_for.replace('_',' ')}.` : ''}${detectedService.pricing === 'not_allowed' ? ` DO NOT share pricing — say: "${agentConfig?.no_pricing_message}"` : ''}${detectedService.pricing === 'allowed' && detectedService.price_details ? ` Pricing info you can share: ${detectedService.price_details}` : ''}` : ''}
+${detectedService ? `DETECTED SERVICE: Client is asking about "${detectedService.name}". MANDATORY: ${detectedService.ask_for ? ` Ask them for their ${detectedService.ask_for.replace('_',' ')}.` : ''}${detectedService.pricing === 'not_allowed' ? ` DO NOT share pricing — say: "${agentConfig?.no_pricing_message}"` : ''}${detectedService.pricing === 'allowed' && detectedService.price_details ? ` Pricing info you can share: ${detectedService.price_details}` : ''}` : ''}
 
 --- FULL CONVERSATION HISTORY ---
 ${conversationHistory.length > 0

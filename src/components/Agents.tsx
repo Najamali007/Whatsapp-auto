@@ -197,6 +197,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
       fetchAgents();
       setValidationErrors({});
       setSaveSuccess(true);
+      setExpandedService(null);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (error: any) {
       setError(error.message || 'Failed to save agent');
@@ -411,7 +412,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                       </div>
                       <div>
                         <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Business / Brand Name *</label>
-                        <input type="text" placeholder="e.g. Najm Ali SEO Services" value={formData.brand_company || ''}
+                        <input type="text" placeholder="e.g. Ondigix Digital" value={formData.brand_company || ''}
                           className={`w-full bg-gray-50 border ${validationErrors.brand_company ? 'border-red-400' : 'border-gray-200'} rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20`}
                           onChange={e => setFormData({ ...formData, brand_company: e.target.value })} />
                       </div>
@@ -421,7 +422,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                   {/* Objective */}
                   <div>
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">What does this agent do? *</label>
-                    <textarea placeholder="e.g. Help clients with SEO, answer queries, share pricing and portfolios on request"
+                    <textarea placeholder="e.g. Help clients with Digital Marketing, answer queries, share pricing and portfolios on request"
                       value={formData.objective || ''} rows={3}
                       className={`w-full bg-gray-50 border ${validationErrors.objective ? 'border-red-400' : 'border-gray-200'} rounded-xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20 resize-none`}
                       onChange={e => setFormData({ ...formData, objective: e.target.value })} />

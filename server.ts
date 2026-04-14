@@ -512,20 +512,20 @@ app.get('/api/agents', authenticateToken, async (req: any, res) => {
 });
 
 app.post('/api/agents', authenticateToken, async (req: any, res) => {
-  const { name, personality, role, knowledge_base, brand_company, product_service, objective, tone, playbook, others, avatar, strategy } = req.body;
-  const result = await db.prepare('INSERT INTO agents (user_id, name, personality, role, knowledge_base, brand_company, product_service, objective, tone, playbook, others, avatar, strategy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(req.user.id, name, personality, role, knowledge_base, brand_company, product_service, objective, tone, playbook, others, avatar, strategy);
+  const { name, personality, role, knowledge_base, brand_company, product_service, objective, tone, playbook, others, avatar, strategy, agent_config } = req.body;
+  const result = await db.prepare('INSERT INTO agents (user_id, name, personality, role, knowledge_base, brand_company, product_service, objective, tone, playbook, others, avatar, strategy, agent_config) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(req.user.id, name, personality, role, knowledge_base, brand_company, product_service, objective, tone, playbook, others, avatar, strategy, agent_config);
   res.json({ id: result.lastInsertRowid });
 });
 
 app.put('/api/agents/:id', authenticateToken, async (req: any, res) => {
-  const { name, personality, role, knowledge_base, brand_company, product_service, objective, tone, playbook, others, avatar, is_active, strategy } = req.body;
+  const { name, personality, role, knowledge_base, brand_company, product_service, objective, tone, playbook, others, avatar, is_active, strategy, agent_config } = req.body;
   
   // Verify ownership
   const agent = await db.prepare('SELECT id FROM agents WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-  await db.prepare('UPDATE agents SET name = ?, personality = ?, role = ?, knowledge_base = ?, brand_company = ?, product_service = ?, objective = ?, tone = ?, playbook = ?, others = ?, avatar = ?, is_active = ?, strategy = ? WHERE id = ?')
-    .run(name, personality, role, knowledge_base, brand_company, product_service, objective, tone, playbook, others, avatar, is_active ? 1 : 0, strategy, req.params.id);
+  await db.prepare('UPDATE agents SET name = ?, personality = ?, role = ?, knowledge_base = ?, brand_company = ?, product_service = ?, objective = ?, tone = ?, playbook = ?, others = ?, avatar = ?, is_active = ?, strategy = ?, agent_config = ? WHERE id = ?')
+    .run(name, personality, role, knowledge_base, brand_company, product_service, objective, tone, playbook, others, avatar, is_active ? 1 : 0, strategy, agent_config, req.params.id);
   res.json({ success: true });
 });
 
