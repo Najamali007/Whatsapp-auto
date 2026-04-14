@@ -235,28 +235,33 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer, f
       }
       await db.exec('COMMIT');
 
-      // Sync messages/conversations
-      io.emit('sync_status', { sessionId, sessionName, status: 'syncing', progress: 10, message: 'Syncing messages...' });
+      // Sync messages/conversations (REAL-TIME FOCUS: Only sync very recent messages from history)
+      io.emit('sync_status', { sessionId, sessionName, status: 'syncing', progress: 10, message: 'Syncing recent messages...' });
       
+      const now = Math.floor(Date.now() / 1000);
+      const oneHourAgo = now - (60 * 60); // Only last 1 hour of history
+      const recentMessages = messages.filter(m => Number(m.messageTimestamp) > oneHourAgo);
+
       let processed = 0;
-      const total = messages.length;
+      const total = recentMessages.length;
       
-      // Process messages in chunks to avoid blocking too long and allow progress updates
-      const chunkSize = 50;
-      for (let i = 0; i < messages.length; i += chunkSize) {
-        const chunk = messages.slice(i, i + chunkSize);
-        await db.exec('BEGIN TRANSACTION');
-        for (const msg of chunk) {
-          if (msg.key.remoteJid === 'status@broadcast') continue;
-          if (msg.message) {
-            await saveMessage(sessionId, sock, msg, io, false);
+      if (total > 0) {
+        const chunkSize = 50;
+        for (let i = 0; i < recentMessages.length; i += chunkSize) {
+          const chunk = recentMessages.slice(i, i + chunkSize);
+          await db.exec('BEGIN TRANSACTION');
+          for (const msg of chunk) {
+            if (msg.key.remoteJid === 'status@broadcast') continue;
+            if (msg.message) {
+              await saveMessage(sessionId, sock, msg, io, false);
+            }
+            processed++;
           }
-          processed++;
+          await db.exec('COMMIT');
+          
+          const progress = Math.min(10 + Math.round((processed / total) * 90), 99);
+          io.emit('sync_status', { sessionId, sessionName, status: 'syncing', progress, message: `Syncing messages (${processed}/${total})...` });
         }
-        await db.exec('COMMIT');
-        
-        const progress = Math.min(10 + Math.round((processed / total) * 90), 99);
-        io.emit('sync_status', { sessionId, sessionName, status: 'syncing', progress, message: `Syncing messages (${processed}/${total})...` });
       }
       
       io.emit('sync_status', { sessionId, sessionName, status: 'completed', progress: 100 });
@@ -851,12 +856,14 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     const agent = await db.prepare('SELECT * FROM agents WHERE id = ?').get(session.agent_id) as any;
     if (!agent) return;
 
-    // 1. Cooldown Mechanism (2 hours)
+    // 1. Cooldown & New Day Detection
     const now = new Date();
+    const lastGreetingAt = conversation.last_greeting_at ? new Date(conversation.last_greeting_at) : null;
+    const isNewDay = !lastGreetingAt || lastGreetingAt.toDateString() !== now.toDateString();
+
     if (conversation.last_agent_message_at) {
       const lastAgentMsg = new Date(conversation.last_agent_message_at);
       const diffHours = (now.getTime() - lastAgentMsg.getTime()) / (1000 * 60 * 60);
-      // We respond to incoming messages regardless of cooldown, but we use it for internal logic if needed.
     }
 
     // 2. Acknowledgment Detection (Stop Logic)
@@ -867,7 +874,7 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     const contactName = conversation.contact_name || '';
     const isExistingClient = contactName.includes('Client') || contactName.includes('CUS');
     
-    // 4. Check if 5+ hours since last message → send welcome back msg
+    // 4. Check if 5+ hours since last message
     const lastContactMsg = await db.prepare(`
       SELECT created_at FROM messages 
       WHERE conversation_id = ? AND sender = 'contact' 
@@ -878,6 +885,13 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
       ? (now.getTime() - new Date(lastContactMsg.created_at).getTime()) / (1000 * 60 * 60)
       : 0;
     const isReturningAfterLongTime = hoursSinceLastMsg >= 5;
+
+    // Is the user asking a question? (Prioritize answering over greeting)
+    const userIsAsking = userMessage.includes('?') || 
+                        userMessage.toLowerCase().includes('how') || 
+                        userMessage.toLowerCase().includes('what') || 
+                        userMessage.toLowerCase().includes('price') ||
+                        userMessage.toLowerCase().includes('rate');
 
     // Fetch last 7 messages for full context
     const lastMessages = await db.prepare(`
@@ -1039,17 +1053,15 @@ ${conversationHistory.length > 0
 CLIENT JUST SENT: "${userMessage}"
 
 REPLY INSTRUCTIONS:
-${isFirstEverMessage
-  ? `1. FIRST MESSAGE — Greet as ${agent.name} from ${agent.brand_company || 'our company'}, then answer their message.`
-  : alreadyGreeted
-    ? `1. ONGOING CHAT — NO greeting whatsoever. Jump straight to answering.`
-    : `1. Continue naturally from history.`
+${(isNewDay && !userIsAsking)
+  ? `1. FIRST MESSAGE OF THE DAY — Greet as ${agent.name} from ${agent.brand_company || 'our company'}, then answer their message.`
+  : `1. ONGOING CHAT — NO greeting whatsoever. Jump straight to answering the client's message.`
 }
 ${lastAgentAskedQuestion
   ? `2. Your previous message asked a question. Client answered: "${userMessage}". Now give the RELEVANT DETAILS for that answer — don't repeat the question.`
   : `2. Answer their message directly and specifically.`
 }
-${isReturningAfterLongTime && !isFirstEverMessage ? `3. Client back after 5+ hours — brief warm welcome, then answer.` : ''}
+${isReturningAfterLongTime && !isNewDay && !userIsAsking ? `3. Client back after 5+ hours — brief warm welcome, then answer.` : ''}
 ${isAck ? `3. Client said ok/thanks — reply "You're welcome! 😊" and stop.` : ''}
 
 HARD RULES:
@@ -1110,8 +1122,6 @@ HARD RULES:
 
     // Update Timestamps
     const timestamp = new Date().toISOString();
-    const lastGreetingAt = conversation.last_greeting_at ? new Date(conversation.last_greeting_at) : null;
-    const isNewDay = !lastGreetingAt || lastGreetingAt.toDateString() !== now.toDateString();
 
     if (isNewDay) {
       await db.prepare('UPDATE conversations SET last_greeting_at = ? WHERE id = ?').run(timestamp, conversation.id);

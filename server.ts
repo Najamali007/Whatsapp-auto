@@ -2413,31 +2413,35 @@ app.post('/api/user-websites/:id/audit', authenticateToken, async (req: any, res
   }
 });
 
-// --- Vite Middleware & SPA Fallback ---
-if (process.env.NODE_ENV !== 'production') {
-  console.log('Starting Vite in development mode...');
-  const vite = await createViteServer({
-    server: { middlewareMode: true },
-    appType: 'spa',
-  });
-  app.use(vite.middlewares);
-} else {
-  console.log('Serving static files in production mode...');
-  const distPath = path.join(process.cwd(), 'dist');
-  app.use(express.static(distPath));
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(distPath, 'index.html'));
-  });
-}
-
-// Initialize Database and Start Server
-console.log('Initializing database...');
+// Initialize Database and Vite in parallel
+console.log('Starting server initialization...');
 try {
-  await initDb();
-  console.log('Database initialized.');
+  const [vite] = await Promise.all([
+    (async () => {
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('Starting Vite in development mode...');
+        const v = await createViteServer({
+          server: { middlewareMode: true },
+          appType: 'spa',
+        });
+        app.use(v.middlewares);
+        return v;
+      } else {
+        console.log('Serving static files in production mode...');
+        const distPath = path.join(process.cwd(), 'dist');
+        app.use(express.static(distPath));
+        app.get('*', (req, res) => {
+          res.sendFile(path.join(distPath, 'index.html'));
+        });
+        return null;
+      }
+    })(),
+    initDb().then(() => console.log('Database initialized.'))
+  ]);
+
+  console.log('Initialization complete.');
 } catch (error) {
-  console.error('Failed to initialize database:', error);
-  // Don't exit, try to start anyway
+  console.error('Failed during server initialization:', error);
 }
 
 console.log(`Starting server on port ${PORT}...`);

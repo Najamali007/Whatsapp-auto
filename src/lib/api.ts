@@ -24,7 +24,7 @@ async function _apiFetch(url: string, options: RequestInit = {}, onLogout?: () =
     headers['Content-Type'] = 'application/json';
   }
 
-  const maxRetries = 3;
+  const maxRetries = 5;
   let lastError: any;
 
   for (let i = 0; i < maxRetries; i++) {
@@ -84,7 +84,9 @@ async function _apiFetch(url: string, options: RequestInit = {}, onLogout?: () =
       
       console.error(`Fetch attempt ${i + 1} failed for ${url}:`, error);
       if (i < maxRetries - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+        // Exponential backoff: 2s, 4s, 8s, 16s
+        const delay = Math.pow(2, i + 1) * 1000;
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
   }

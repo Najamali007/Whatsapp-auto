@@ -3,7 +3,6 @@ import { Users, Plus, Trash2, Edit2, Check, X, Loader2, BrainCircuit, Upload, Fi
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch } from '../lib/api';
 import { loadingManager } from '../lib/loading';
-import AgentGuide from './AgentGuide';
 
 interface Service {
   id: string;
@@ -64,7 +63,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(initialAgentId || null);
-  const [activeSubTab, setActiveSubTab] = useState<'agents' | 'services' | 'knowledge' | 'guide'>('agents');
+  const [activeSubTab, setActiveSubTab] = useState<'agents' | 'services' | 'knowledge'>('agents');
   const [isTraining, setIsTraining] = useState<number | null>(null);
   const [trainingFiles, setTrainingFiles] = useState<TrainingFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -320,7 +319,6 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
           { id: 'agents', label: 'Basic Info' },
           { id: 'services', label: 'Services & Flow' },
           { id: 'knowledge', label: 'Knowledge' },
-          { id: 'guide', label: 'Guide' },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveSubTab(tab.id as any)}
             className={`px-6 py-4 text-sm font-black uppercase tracking-widest transition-all border-b-2 ${activeSubTab === tab.id ? 'border-primary text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
@@ -683,17 +681,8 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                     <p className="text-gray-400 font-medium">Both methods work together — use both for best results</p>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <button onClick={() => setActiveTrainTab('chat')}
-                      className="group p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-primary/40 hover:shadow-xl transition-all text-left">
-                      <div className="w-14 h-14 bg-primary/10 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-primary transition-all">
-                        <MessageSquare className="w-7 h-7 text-primary group-hover:text-white transition-all" />
-                      </div>
-                      <h3 className="text-xl font-black text-gray-900 mb-2">Train with Chat</h3>
-                      <p className="text-sm text-gray-500 leading-relaxed">Tell it pricing, FAQs, portfolios — it remembers permanently.</p>
-                      <div className="mt-5 flex items-center gap-2 text-primary font-black text-xs uppercase tracking-widest">Start Training →</div>
-                    </button>
                     <button onClick={() => setActiveTrainTab('document')}
-                      className="group p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-purple-400/40 hover:shadow-xl transition-all text-left">
+                      className="group p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-purple-400/40 hover:shadow-xl transition-all text-left w-full max-w-md mx-auto">
                       <div className="w-14 h-14 bg-purple-50 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-purple-500 transition-all">
                         <FileText className="w-7 h-7 text-purple-500 group-hover:text-white transition-all" />
                       </div>
@@ -702,14 +691,6 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                       <div className="mt-5 flex items-center gap-2 text-purple-500 font-black text-xs uppercase tracking-widest">Upload File →</div>
                     </button>
                   </div>
-                </div>
-              ) : activeTrainTab === 'chat' ? (
-                <div>
-                  <div className="flex items-center gap-3 mb-6">
-                    <button onClick={() => setActiveTrainTab(null)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-400"><X className="w-5 h-5" /></button>
-                    <h2 className="text-xl font-black text-gray-900">Train with Chat</h2>
-                  </div>
-                  <AgentGuide agentId={selectedAgentId} token={token} />
                 </div>
               ) : (
                 <div>
@@ -766,18 +747,6 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                   </div>
                 </div>
               )}
-            </div>
-          )}
-
-          {/* ── GUIDE TAB ── */}
-          {activeSubTab === 'guide' && (
-            <div className="h-full overflow-hidden">
-              {!selectedAgentId ? (
-                <div className="flex flex-col items-center justify-center h-80 bg-white border border-gray-100 rounded-3xl m-12 text-center">
-                  <MessageSquare className="w-10 h-10 text-gray-200 mb-3" />
-                  <p className="text-gray-400 font-black uppercase tracking-widest text-xs">Select an agent to guide</p>
-                </div>
-              ) : <AgentGuide agentId={selectedAgentId} token={token} />}
             </div>
           )}
 
