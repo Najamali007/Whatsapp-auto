@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Save, Key, Trash2, AlertCircle, CheckCircle2, Loader2, RefreshCw, Coins, X, Globe, Plus, ExternalLink, LayoutDashboard, Users, Zap, Target } from 'lucide-react';
+import { Save, Key, Trash2, AlertCircle, CheckCircle2, Loader2, RefreshCw, Coins, X, Globe, Plus, ExternalLink, LayoutDashboard, Users, Zap, Target, Layers } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 
 interface ApiSetting {
@@ -310,7 +310,7 @@ export default function Settings() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          {userRole === 'super_admin' && (
+          {userRole === 'super_admin' ? (
             <section className="glass-card p-6 rounded-2xl border border-white/20 dark:border-white/10">
               <div className="flex items-center gap-3 mb-6">
                 <div className="p-2 bg-blue-500/10 rounded-lg">
@@ -421,6 +421,18 @@ export default function Settings() {
                 })}
               </div>
             </section>
+          ) : (
+            <section className="glass-card p-6 rounded-2xl border border-white/20 dark:border-white/10">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-500/10 rounded-lg">
+                  <Key className="w-5 h-5 text-blue-500" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">AI Configuration</h2>
+                  <p className="text-sm text-gray-500">API settings are managed globally by the Super Admin. Your account consumes tokens provided by the administrator.</p>
+                </div>
+              </div>
+            </section>
           )}
 
           <section className="glass-card p-6 rounded-2xl border border-white/20 dark:border-white/10">
@@ -469,13 +481,15 @@ export default function Settings() {
                               <span className="text-sm font-bold text-gray-700 dark:text-gray-200">{linkedAgent.name}</span>
                             </div>
                           </div>
-                          <button
-                            onClick={() => handleResetAgentTraining(linkedAgent)}
-                            disabled={resettingItem === `agent-${linkedAgent.id}`}
-                            className="px-3 py-1.5 bg-blue-500/10 text-blue-600 hover:bg-blue-500/20 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50 flex items-center gap-1.5"
-                          >
-                            {resettingItem === `agent-${linkedAgent.id}` ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Zap className="w-3 h-3" /> Reset Training</>}
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleResetAgentTraining(linkedAgent)}
+                              disabled={resettingItem === `agent-${linkedAgent.id}`}
+                              className="px-3 py-1.5 bg-blue-500/10 text-blue-600 hover:bg-blue-500/20 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50 flex items-center gap-1.5"
+                            >
+                              {resettingItem === `agent-${linkedAgent.id}` ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Zap className="w-3 h-3" /> Reset Training</>}
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -494,13 +508,15 @@ export default function Settings() {
                       <p className="text-[10px] text-gray-400">No session linked</p>
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleResetAgentTraining(agent)}
-                    disabled={resettingItem === `agent-${agent.id}`}
-                    className="px-3 py-1.5 bg-blue-500/10 text-blue-600 hover:bg-blue-500/20 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    {resettingItem === `agent-${agent.id}` ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Zap className="w-3 h-3" /> Reset Training</>}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleResetAgentTraining(agent)}
+                      disabled={resettingItem === `agent-${agent.id}`}
+                      className="px-3 py-1.5 bg-blue-500/10 text-blue-600 hover:bg-blue-500/20 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      {resettingItem === `agent-${agent.id}` ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Zap className="w-3 h-3" /> Reset Training</>}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

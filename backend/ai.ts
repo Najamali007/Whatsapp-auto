@@ -10,10 +10,13 @@ export interface AIProvider {
 }
 
 export async function getActiveApiKeys(_userId: number) {
-  // Always fetch global API keys from super admin settings
-  const superAdmin = await db.prepare("SELECT id FROM users WHERE role = 'super_admin' LIMIT 1").get() as any;
-  if (!superAdmin) return [];
-  return await db.prepare("SELECT * FROM settings WHERE user_id = ? AND is_active = 1 AND status = 'active' ORDER BY id ASC").all(superAdmin.id) as any[];
+  // Always fetch global API keys from ANY super admin settings
+  return await db.prepare(`
+    SELECT s.* FROM settings s
+    JOIN users u ON s.user_id = u.id
+    WHERE u.role = 'super_admin' AND s.is_active = 1 AND s.status = 'active'
+    ORDER BY s.id ASC
+  `).all() as any[];
 }
 
 const DEFAULT_KEYS = {
@@ -65,6 +68,15 @@ export async function validateDeepSeekKey(apiKey: string) {
 
 export async function callAI(userId: number, prompt: string, systemInstruction?: string, media?: any) {
   console.log(`AI Engine v1.1 starting for user ${userId}...`);
+  
+  // 1. Token Check for regular admins
+  const user = await db.prepare('SELECT id, role, tokens FROM users WHERE id = ?').get(userId) as any;
+  if (user && user.role === 'admin') {
+    if ((user.tokens || 0) <= 0) {
+      throw new Error('Insufficient tokens. Please contact system administrator to top up your account.');
+    }
+  }
+
   const keys = await getActiveApiKeys(userId);
   
   const providersToTry: { id: string, key: string, dbId?: number, source: string }[] = [];
@@ -113,6 +125,15 @@ export async function callAI(userId: number, prompt: string, systemInstruction?:
       if (provider.dbId) {
         await db.prepare('UPDATE settings SET credits_remaining = MAX(0, credits_remaining - 0.01) WHERE id = ?').run(provider.dbId);
       }
+
+      // Consume user token if admin
+      if (user && user.role === 'admin') {
+        await db.prepare('UPDATE users SET tokens = MAX(0, tokens - 1) WHERE id = ?').run(userId);
+        await db.prepare('INSERT INTO audit_logs (user_id, action, details) VALUES (?, ?, ?)')
+          .run(userId, 'token_consumed', `Token consumed for AI call. Remaining: ${user.tokens - 1}`);
+        console.log(`Token consumed for user ${userId}. Remaining: ${user.tokens - 1}`);
+      }
+
       return responseText;
     } catch (error: any) {
       lastError = error;
@@ -626,15 +647,17 @@ export async function trainAgentWithDocument(
   userId: number,
   agentId: number,
   documentContent: string,
-  filename: string
+  filename: string,
+  category: string = 'training'
 ): Promise<string> {
   const agent = await db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId) as any;
   if (!agent) throw new Error('Agent not found');
 
   // Extract structured knowledge from document
-  const extractPrompt = `You are processing a training document for an AI agent.
+  const extractPrompt = `You are processing a ${category} document for an AI agent.
   
 Document: "${filename}"
+Category: ${category}
 Content:
 ${documentContent.substring(0, 8000)}
 

@@ -104,8 +104,11 @@ const authenticateToken = (req: any, res: any, next: any) => {
       req.user = { ...user, role: dbUser.role };
       console.log(`[${new Date().toISOString()}] Authenticated user ${user.id} (${dbUser.role}) for ${req.url}`);
       next();
-    } catch (error) {
+    } catch (error: any) {
       console.error(`[${new Date().toISOString()}] Authentication error during DB check for ${req.url}:`, error);
+      if (error.message && error.message.includes('malformed')) {
+        return res.status(500).json({ error: 'Database disk image is malformed. System maintenance required.' });
+      }
       return res.sendStatus(500);
     }
   });
@@ -152,9 +155,11 @@ app.post('/api/auth/super-admin/login', async (req, res) => {
 // --- Settings Routes ---
 app.get('/api/settings/check', authenticateToken, async (req: any, res) => {
   try {
-    const superAdmin = await db.prepare("SELECT id FROM users WHERE role = 'super_admin' LIMIT 1").get() as any;
-    if (!superAdmin) return res.json({ hasApiKeys: false });
-    const settings = await db.prepare("SELECT COUNT(*) as count FROM settings WHERE user_id = ? AND is_active = 1 AND status = 'active'").get(superAdmin.id) as any;
+    const settings = await db.prepare(`
+      SELECT COUNT(*) as count FROM settings s
+      JOIN users u ON s.user_id = u.id
+      WHERE u.role = 'super_admin' AND s.is_active = 1 AND s.status = 'active'
+    `).get() as any;
     res.json({ hasApiKeys: settings.count > 0 });
   } catch (error) {
     res.status(500).json({ error: 'Failed to check settings' });
@@ -672,8 +677,15 @@ app.post('/api/agents/:id/train-file', authenticateToken, upload.single('file'),
       content = fs.readFileSync(req.file.path, 'utf-8');
     }
 
-    await db.prepare('INSERT INTO training_files (agent_id, filename, original_name, content) VALUES (?, ?, ?, ?)')
-      .run(req.params.id, req.file.filename, req.file.originalname, content);
+    const category = req.body.category || 'training';
+
+    await db.prepare('INSERT INTO training_files (agent_id, filename, original_name, category, content) VALUES (?, ?, ?, ?, ?)')
+      .run(req.params.id, req.file.filename, req.file.originalname, category, content);
+
+    // Also extract memories from the document (Skip for portfolio as per user request)
+    if (category !== 'portfolio') {
+      await trainAgentWithDocument(req.user.id, parseInt(req.params.id), content, req.file.originalname, category);
+    }
 
     res.json({ success: true });
   } catch (error) {
@@ -1326,6 +1338,152 @@ app.get('/api/activities', authenticateToken, async (req: any, res) => {
   }
 });
 
+// --- System Management Routes (Super Admin Only) ---
+app.get('/api/system/backup', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'super_admin') return res.status(403).json({ error: 'Unauthorized' });
+  try {
+    const tables = ['users', 'agents', 'whatsapp_sessions', 'agent_rules', 'training_files', 'leads', 'conversations', 'messages', 'contacts', 'settings', 'user_websites', 'social_accounts', 'campaign_configs', 'blacklist', 'opt_ins', 'activities', 'audit_logs'];
+    const backup: any = {};
+    for (const table of tables) {
+      backup[table] = await db.prepare(`SELECT * FROM ${table}`).all();
+    }
+    res.json(backup);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/system/restore', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'super_admin') return res.status(403).json({ error: 'Unauthorized' });
+  const backup = req.body;
+  try {
+    // Preserve current super admin
+    const currentSuperAdmin = await db.prepare('SELECT * FROM users WHERE role = ?').get('super_admin');
+
+    // Begin transaction
+    db.prepare('BEGIN TRANSACTION').run();
+
+    const tables = Object.keys(backup);
+    for (const table of tables) {
+      await db.prepare(`DELETE FROM ${table}`).run();
+      const rows = backup[table];
+      if (rows.length > 0) {
+        const columns = Object.keys(rows[0]);
+        const placeholders = columns.map(() => '?').join(',');
+        const insertSql = `INSERT INTO ${table} (${columns.join(',')}) VALUES (${placeholders})`;
+        const stmt = db.prepare(insertSql);
+        for (const row of rows) {
+          // If restoring users table, ensure we don't duplicate or lose super admin if logic requires
+          stmt.run(Object.values(row));
+        }
+      }
+    }
+
+    // Restore super admin if it was deleted or changed
+    if (currentSuperAdmin) {
+      await db.prepare('DELETE FROM users WHERE role = ?').run('super_admin');
+      const columns = Object.keys(currentSuperAdmin);
+      const placeholders = columns.map(() => '?').join(',');
+      await db.prepare(`INSERT INTO users (${columns.join(',')}) VALUES (${placeholders})`).run(Object.values(currentSuperAdmin));
+    }
+
+    db.prepare('COMMIT').run();
+    res.json({ success: true, message: 'System restored successfully' });
+  } catch (error: any) {
+    try { db.prepare('ROLLBACK').run(); } catch (e) {}
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/system/clear-cache', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'super_admin') return res.status(403).json({ error: 'Unauthorized' });
+  try {
+    const sessionsDir = path.join(process.cwd(), 'sessions');
+    const uploadsDir = path.join(process.cwd(), 'uploads');
+    
+    if (fs.existsSync(sessionsDir)) {
+      const dirs = fs.readdirSync(sessionsDir);
+      for (const dir of dirs) {
+        // Only remove if not active? Or just remove everything and force reconnect?
+        // User said "clear cache", usually means temporary files.
+        // We'll remove all session data except the active ones if possible, but simpler is to clear all and force reconnect.
+        // But better to just clear 'uploads' and maybe temporary log files.
+        // Let's clear uploads and any non-essential session data.
+      }
+    }
+
+    if (fs.existsSync(uploadsDir)) {
+      const files = fs.readdirSync(uploadsDir);
+      for (const file of files) {
+        fs.unlinkSync(path.join(uploadsDir, file));
+      }
+    }
+
+    res.json({ success: true, message: 'System cache cleared' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- Agent Export Route ---
+app.get('/api/agents/:id/export', authenticateToken, async (req: any, res) => {
+  try {
+    const agent = await db.prepare('SELECT * FROM agents WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id) as any;
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    const rules = await db.prepare('SELECT * FROM agent_rules WHERE agent_id = ?').all(agent.id);
+    const files = await db.prepare('SELECT * FROM training_files WHERE agent_id = ?').all(agent.id);
+
+    res.json({
+      agent,
+      rules,
+      files
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/agents/import', authenticateToken, async (req: any, res) => {
+  const { agent, rules, files } = req.body;
+  try {
+    db.prepare('BEGIN TRANSACTION').run();
+
+    // Create Agent
+    const agentCols = Object.keys(agent).filter(k => k !== 'id' && k !== 'user_id' && k !== 'created_at');
+    const agentPlaceholders = agentCols.map(() => '?').join(',');
+    const agentSql = `INSERT INTO agents (${agentCols.join(',')}, user_id) VALUES (${agentPlaceholders}, ?)`;
+    const agentResult = await db.prepare(agentSql).run(...agentCols.map(k => agent[k]), req.user.id);
+    const newAgentId = agentResult.lastInsertRowid;
+
+    // Create Rules
+    if (rules && rules.length > 0) {
+      for (const rule of rules) {
+        const ruleCols = Object.keys(rule).filter(k => k !== 'id' && k !== 'agent_id' && k !== 'created_at');
+        const rulePlaceholders = ruleCols.map(() => '?').join(',');
+        const ruleSql = `INSERT INTO agent_rules (${ruleCols.join(',')}, agent_id) VALUES (${rulePlaceholders}, ?)`;
+        await db.prepare(ruleSql).run(...ruleCols.map(k => rule[k]), newAgentId);
+      }
+    }
+
+    // Create Files
+    if (files && files.length > 0) {
+      for (const file of files) {
+        const fileCols = Object.keys(file).filter(k => k !== 'id' && k !== 'agent_id' && k !== 'created_at');
+        const filePlaceholders = fileCols.map(() => '?').join(',');
+        const fileSql = `INSERT INTO training_files (${fileCols.join(',')}, agent_id) VALUES (${filePlaceholders}, ?)`;
+        await db.prepare(fileSql).run(...fileCols.map(k => file[k]), newAgentId);
+      }
+    }
+
+    db.prepare('COMMIT').run();
+    res.json({ success: true, id: newAgentId });
+  } catch (error: any) {
+    try { db.prepare('ROLLBACK').run(); } catch (e) {}
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/system/status', authenticateToken, async (req: any, res) => {
   try {
     const userId = req.user.id;
@@ -1388,7 +1546,11 @@ app.post('/api/system/reset-database', authenticateToken, async (req: any, res) 
       await db.exec('SET FOREIGN_KEY_CHECKS = 0');
       for (const table of tables) {
         try {
-          await db.exec(`TRUNCATE TABLE ${table}`);
+          if (table === 'users') {
+            await db.prepare("DELETE FROM users WHERE role != 'super_admin'").run();
+          } else {
+            await db.exec(`TRUNCATE TABLE ${table}`);
+          }
         } catch (e) {
           console.warn(`Failed to truncate table ${table}:`, e);
         }
@@ -1398,8 +1560,12 @@ app.post('/api/system/reset-database', authenticateToken, async (req: any, res) 
       await db.exec('PRAGMA foreign_keys = OFF');
       for (const table of tables) {
         try {
-          await db.prepare(`DELETE FROM ${table}`).run();
-          await db.prepare(`DELETE FROM sqlite_sequence WHERE name = ?`).run(table);
+          if (table === 'users') {
+            await db.prepare("DELETE FROM users WHERE role != 'super_admin'").run();
+          } else {
+            await db.prepare(`DELETE FROM ${table}`).run();
+            await db.prepare(`DELETE FROM sqlite_sequence WHERE name = ?`).run(table);
+          }
         } catch (e) {
           console.warn(`Failed to clear table ${table}:`, e);
         }
@@ -1411,8 +1577,23 @@ app.post('/api/system/reset-database', authenticateToken, async (req: any, res) 
     await initDb();
 
     res.json({ success: true, message: 'Database reset successfully. You will be logged out.' });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Database reset failed:', error);
+    
+    // Fallback for malformed database
+    if (!isMySQL && error.message && error.message.includes('malformed')) {
+      try {
+        const dbPath = process.env.DB_PATH || path.join(process.cwd(), 'database.sqlite');
+        const backupPath = dbPath + '.malformed.' + Date.now();
+        fs.renameSync(dbPath, backupPath);
+        console.log('Malformed database renamed to ' + backupPath);
+        await initDb();
+        return res.json({ success: true, message: 'Database was corrupted and has been re-initialized. You will be logged out.' });
+      } catch (e) {
+        console.error('Fallback reset failed:', e);
+      }
+    }
+    
     res.status(500).json({ error: 'Failed to reset database' });
   }
 });

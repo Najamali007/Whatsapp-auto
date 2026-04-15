@@ -1012,8 +1012,24 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     }
 
     // 6. Knowledge & Memory — load from both training files AND agent memory
-    const trainingFiles = await db.prepare('SELECT content FROM training_files WHERE agent_id = ?').all(agent.id) as any[];
-    const trainingData = trainingFiles.map((f: any) => f.content).join('\n\n');
+    const trainingFiles = await db.prepare('SELECT original_name, category, content FROM training_files WHERE agent_id = ?').all(agent.id) as any[];
+    
+    // Smartly organize training data by category
+    const categorizedKnowledge = trainingFiles.reduce((acc: any, f: any) => {
+      const cat = f.category || 'training';
+      if (!acc[cat]) acc[cat] = [];
+      if (cat === 'portfolio') {
+        // For portfolio, just list the name so AI knows it exists and can send it
+        acc[cat].push(`PORTFOLIO_FILE: ${f.original_name}`);
+      } else {
+        acc[cat].push(`FILE: ${f.original_name}\nCONTENT: ${f.content}`);
+      }
+      return acc;
+    }, {});
+
+    const trainingData = Object.entries(categorizedKnowledge).map(([cat, contents]: [string, any]) => {
+      return `[CATEGORY: ${cat.toUpperCase()}]\n${contents.join('\n---\n')}`;
+    }).join('\n\n');
     
     // Load persistent agent memory (from chat training + document training)
     const agentMemories = await db.prepare(
@@ -1050,6 +1066,11 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     // Is first message hai is conversation mein?
     const clientName = conversation.contact_name || 'Client';
 
+    // 9. Dynamic Greeting Rule
+    const greetingRule = greetedToday 
+      ? "STRICT RULE: NO GREETINGS. Do NOT say 'Hi', 'Hello', 'Assalam-o-Alaikum', 'Hey', or use the client's name at the start. Jump DIRECTLY to answering the client's message."
+      : "You may start with a brief, natural greeting (e.g., 'Hi' or 'Hello') since this is your first interaction today. Keep it professional.";
+
     const systemInstruction = `You are ${agent.name}, a real team member at ${agent.brand_company || 'our company'}. You are NOT a bot or AI — never say otherwise.
 
 YOUR IDENTITY:
@@ -1059,6 +1080,11 @@ YOUR IDENTITY:
 - Goal: ${agent.objective || 'Help clients professionally'}
 
 YOUR KNOWLEDGE — READ THIS FIRST, ALWAYS USE IT:
+IMPORTANT: If you find duplicate instructions, ALWAYS prioritize the most recent or detailed one.
+If a file is labeled "PORTFOLIO", it is a file you can SEND to the user. To send a portfolio file, include [SEND_FILE: filename] in your response (e.g., [SEND_FILE: My_Work.pdf]).
+Interpret the file based on its name (e.g., "Najam_Portfolio.pdf" is Najam's portfolio).
+If "RULES", follow them strictly. If "TRAINING", use it for general knowledge.
+
 ${memoryData || 'Use your identity info above.'}
 ${trainingData ? `TRAINING DOCS:\n${trainingData}` : ''}
 ${configContext}
@@ -1078,7 +1104,7 @@ ${stageInstruction}
 ${intentInstruction}
 ${lastAgentAskedQuestion ? `Your last message asked a question. Client just answered it. Now give relevant details — do NOT repeat the question.` : ''}
 ${isAck ? `Client said ok/thanks — reply "You're welcome! 😊" and nothing else.` : ''}
-STRICT RULE: NO GREETINGS. Do NOT say "Hi", "Hello", "Assalam-o-Alaikum", "Hey", or use the client's name at the start. Jump DIRECTLY to answering the client's message.
+${greetingRule}
 
 ═══════════════════════════════
 BANNED PHRASES — NEVER USE THESE:
@@ -1121,9 +1147,22 @@ BEFORE SENDING, CHECK:
 3. Does this sound like a real person? → If not, rewrite
 4. Am I actually answering what they asked? → Yes`;
 
-    const aiResponse = await callAI(session.user_id, userMessage, systemInstruction);
+    let aiResponse = await callAI(session.user_id, userMessage, systemInstruction);
    
-    // 10. Anti-Repetition & Robotic Phrase Check
+    // 10. Detect and handle file sending command [SEND_FILE: filename]
+    let fileToSend = null;
+    const fileMatch = aiResponse.match(/\[SEND_FILE:\s*(.*?)\]/);
+    if (fileMatch) {
+      const originalName = fileMatch[1].trim();
+      const fileRecord = await db.prepare('SELECT filename, original_name FROM training_files WHERE agent_id = ? AND original_name = ?').get(agent.id, originalName) as any;
+      if (fileRecord) {
+        fileToSend = fileRecord;
+        // Remove the command from the text response
+        aiResponse = aiResponse.replace(fileMatch[0], '').trim();
+      }
+    }
+
+    // 11. Anti-Repetition & Robotic Phrase Check
     const roboticPhrases = [
       "i saw you replied",
       "i noticed you replied",
@@ -1144,15 +1183,23 @@ BEFORE SENDING, CHECK:
       "hi ",
       "hello ",
       "hey ",
+      "hi!",
+      "hello!",
+      "hey!",
     ];
 
     const lowerResponse = aiResponse.toLowerCase().trim();
 
-    // Block repeated "Hi [name]" greetings if agent already replied before
-    const nameGreetingPattern = alreadyGreeted && new RegExp(`^hi\\s+${clientName.toLowerCase()}`).test(lowerResponse);
+    // Block repeated greetings if agent already greeted today
+    const isRepeatedGreeting = greetedToday && (
+      lowerResponse.startsWith("hi") || 
+      lowerResponse.startsWith("hello") || 
+      lowerResponse.startsWith("hey") || 
+      lowerResponse.startsWith("assalam")
+    );
 
     // Block if it contains robotic meta-commentary
-    const containsRoboticPhrase = nameGreetingPattern || roboticPhrases.some(phrase => lowerResponse.includes(phrase));
+    const containsRoboticPhrase = isRepeatedGreeting || roboticPhrases.some(phrase => lowerResponse.includes(phrase));
 
     const isDuplicate = containsRoboticPhrase || recentAgentMessages.some(m => {
       const s1 = lowerResponse;
@@ -1174,13 +1221,35 @@ BEFORE SENDING, CHECK:
     await sock.sendPresenceUpdate('paused', conversation.contact_number);
 
     // Send message via WhatsApp
-    await sock.sendMessage(conversation.contact_number, { text: aiResponse });
+    if (aiResponse) {
+      await sock.sendMessage(conversation.contact_number, { text: aiResponse });
+    }
 
-    // Consume token for admin
-    if (user && user.role === 'admin') {
-      await db.prepare('UPDATE users SET tokens = tokens - 1 WHERE id = ?').run(session.user_id);
-      await db.prepare('INSERT INTO audit_logs (user_id, action, details) VALUES (?, ?, ?)')
-        .run(session.user_id, 'token_consumed', `Token consumed for message in conversation ${conversation.id}. New total: ${user.tokens - 1}`);
+    // Handle file sending if detected
+    if (fileToSend) {
+      const filePath = path.join(process.cwd(), 'uploads', fileToSend.filename);
+      if (fs.existsSync(filePath)) {
+        const fileExt = path.extname(fileToSend.original_name).toLowerCase();
+        const isImage = ['.jpg', '.jpeg', '.png', '.webp'].includes(fileExt);
+        
+        try {
+          if (isImage) {
+            await sock.sendMessage(conversation.contact_number, { 
+              image: fs.readFileSync(filePath), 
+              caption: fileToSend.original_name 
+            });
+          } else {
+            await sock.sendMessage(conversation.contact_number, { 
+              document: fs.readFileSync(filePath), 
+              fileName: fileToSend.original_name,
+              mimetype: 'application/octet-stream'
+            });
+          }
+          console.log(`Sent file ${fileToSend.original_name} to ${conversation.contact_number}`);
+        } catch (fileErr: any) {
+          console.error(`Failed to send file ${fileToSend.original_name}:`, fileErr.message);
+        }
+      }
     }
 
     // Update Timestamps

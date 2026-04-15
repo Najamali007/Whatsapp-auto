@@ -36,6 +36,7 @@ import {
 export default function SuperAdminOverview() {
   const [stats, setStats] = useState<any>(null);
   const [activities, setActivities] = useState<any[]>([]);
+  const [isClearingCache, setIsClearingCache] = useState(false);
   const [chartData, setChartData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -136,7 +137,126 @@ export default function SuperAdminOverview() {
         ))}
       </div>
 
+      {/* System Management */}
+      <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h3 className="text-lg font-black text-gray-900 tracking-tight uppercase">System Management</h3>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">Global backup, restore and maintenance</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <button
+            onClick={async () => {
+              try {
+                const data = await apiFetch('/api/system/backup');
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `system_backup_${new Date().toISOString().split('T')[0]}.json`;
+                a.click();
+              } catch (e) {
+                alert('Failed to backup system');
+              }
+            }}
+            className="p-6 bg-slate-900 text-white rounded-3xl hover:bg-slate-800 transition-all flex flex-col items-center text-center gap-3 group"
+          >
+            <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
+              <Database className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <p className="text-sm font-black uppercase tracking-widest">Full Backup</p>
+              <p className="text-[10px] text-slate-400 font-bold mt-1">Export entire database logic</p>
+            </div>
+          </button>
+
+          <div className="relative">
+            <input
+              type="file"
+              id="restore-db"
+              className="hidden"
+              accept=".json"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                if (!confirm('WARNING: This will overwrite current system data. Continue?')) return;
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                  try {
+                    const data = JSON.parse(event.target?.result as string);
+                    await apiFetch('/api/system/restore', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(data)
+                    });
+                    alert('System restored successfully. Please refresh.');
+                    window.location.reload();
+                  } catch (e) {
+                    alert('Failed to restore system: ' + (e as any).message);
+                  }
+                };
+                reader.readAsText(file);
+              }}
+            />
+            <label
+              htmlFor="restore-db"
+              className="p-6 bg-white border border-gray-100 rounded-3xl hover:bg-gray-50 transition-all flex flex-col items-center text-center gap-3 group cursor-pointer h-full"
+            >
+              <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
+                <ShieldCheck className="w-6 h-6 text-primary" />
+              </div>
+              <div>
+                <p className="text-sm font-black uppercase tracking-widest text-gray-900">Restore System</p>
+                <p className="text-[10px] text-gray-400 font-bold mt-1">Import database from JSON</p>
+              </div>
+            </label>
+          </div>
+
+          <button
+            onClick={async () => {
+              if (!confirm('Clear system cache and temporary files?')) return;
+              setIsClearingCache(true);
+              try {
+                await apiFetch('/api/system/clear-cache', { method: 'POST' });
+                alert('Cache cleared successfully');
+              } catch (e) {
+                alert('Failed to clear cache');
+              } finally {
+                setIsClearingCache(false);
+              }
+            }}
+            className="p-6 bg-white border border-gray-100 rounded-3xl hover:bg-gray-50 transition-all flex flex-col items-center text-center gap-3 group"
+          >
+            <div className="w-12 h-12 bg-orange-50 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
+              <Zap className="w-6 h-6 text-orange-500" />
+            </div>
+            <div>
+              <p className="text-sm font-black uppercase tracking-widest text-gray-900">Clear Cache</p>
+              <p className="text-[10px] text-gray-400 font-bold mt-1">Maintenance & optimization</p>
+            </div>
+          </button>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
+        {/* Loading Popup for Cache Clear */}
+        <AnimatePresence>
+          {isClearingCache && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
+                className="relative bg-white p-10 rounded-[2.5rem] shadow-2xl text-center max-w-sm w-full">
+                <div className="w-20 h-20 bg-orange-50 rounded-3xl flex items-center justify-center mx-auto mb-6">
+                  <Loader2 className="w-10 h-10 text-orange-500 animate-spin" />
+                </div>
+                <h3 className="text-xl font-black text-gray-900 mb-2">Clearing Cache</h3>
+                <p className="text-gray-400 text-sm font-medium">Please wait while we optimize the system and remove temporary files...</p>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
         {/* Global Growth Chart */}
         <div className="lg:col-span-2 bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
           <div className="flex items-center justify-between mb-8">
@@ -186,7 +306,7 @@ export default function SuperAdminOverview() {
             <AnimatePresence initial={false}>
               {activities.map((log, i) => (
                 <motion.div
-                  key={log.id}
+                  key={`${log.id}-${i}`}
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
                   className="flex gap-4 group"

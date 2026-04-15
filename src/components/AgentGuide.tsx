@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Bot, Loader2, Trash2, Zap, Globe, MessageSquare, Brain, X, RefreshCw } from 'lucide-react';
+import { Send, Bot, Loader2, Trash2, Zap, Globe, MessageSquare, Brain, X, RefreshCw, Upload, Check, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch } from '../lib/api';
 
@@ -20,20 +20,31 @@ interface ChatMessage {
 interface AgentGuideProps {
   agentId: number;
   token: string;
+  category?: 'training' | 'portfolio' | 'rules';
 }
 
-export default function AgentGuide({ agentId, token }: AgentGuideProps) {
+export default function AgentGuide({ agentId, token, category = 'training' }: AgentGuideProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [isFetchingMemories, setIsFetchingMemories] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [uploadCategory, setUploadCategory] = useState<'training' | 'portfolio' | 'rules'>(category);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setUploadCategory(category);
+  }, [category]);
 
   const fetchMemories = async () => {
     try {
       const data = await apiFetch(`/api/agents/${agentId}/memory`);
-      setMemories(data);
+      // Filter memories by category if provided
+      const filteredData = data.filter((m: any) => m.topic === category || !m.topic);
+      setMemories(filteredData);
     } catch (err) {
       console.error('Failed to fetch memories');
     } finally {
@@ -47,15 +58,20 @@ export default function AgentGuide({ agentId, token }: AgentGuideProps) {
       if (data.length > 0) {
         setMessages(data.map((m: any) => ({ id: m.id, role: m.role, content: m.content })));
       } else {
+        const welcomeMessages = {
+          training: "Hello! I'm ready to learn. Teach me anything — product info, how to greet clients, pricing, FAQs, or how to handle objections. I'll remember everything you tell me!",
+          portfolio: "Hello! Tell me about your portfolio. Share your past projects, success stories, and case studies so I can showcase them to potential clients.",
+          rules: "Hello! What are the rules I should follow? Tell me about your business policies, response guidelines, and what I should or shouldn't say."
+        };
         setMessages([{
           role: 'agent',
-          content: "Hello! I'm ready to learn. Teach me anything — product info, how to greet clients, pricing, FAQs, or how to handle objections. I'll remember everything you tell me!"
+          content: welcomeMessages[category] || welcomeMessages.training
         }]);
       }
     } catch (err) {
       setMessages([{
         role: 'agent',
-        content: "Hello! I'm ready to learn. Teach me anything — product info, how to greet clients, pricing, FAQs, or how to handle objections. I'll remember everything you tell me!"
+        content: "Hello! I'm ready to learn. I'll remember everything you tell me!"
       }]);
     }
   };
@@ -63,7 +79,7 @@ export default function AgentGuide({ agentId, token }: AgentGuideProps) {
   useEffect(() => {
     fetchMemories();
     fetchChatHistory();
-  }, [agentId]);
+  }, [agentId, category]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -83,7 +99,7 @@ export default function AgentGuide({ agentId, token }: AgentGuideProps) {
       const data = await apiFetch(`/api/agents/${agentId}/train-chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMsg }),
+        body: JSON.stringify({ message: userMsg, category: uploadCategory }),
       });
 
       setMessages(prev => [...prev, { role: 'agent', content: data.response }]);
@@ -115,6 +131,32 @@ export default function AgentGuide({ agentId, token }: AgentGuideProps) {
       }]);
     } catch (err) {
       console.error('Failed to clear history');
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploading(true);
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('category', uploadCategory);
+    try {
+      const response = await fetch(`/api/agents/${agentId}/train-file`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: fd,
+      });
+      if (response.ok) {
+        setUploadSuccess(true);
+        setTimeout(() => setUploadSuccess(false), 3000);
+        fetchMemories();
+        setMessages(prev => [...prev, { role: 'agent', content: `I've successfully read and learned from "${file.name}" (Category: ${uploadCategory}).` }]);
+      }
+    } catch (e) {}
+    finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -166,6 +208,11 @@ export default function AgentGuide({ agentId, token }: AgentGuideProps) {
         {/* Input */}
         <div className="p-5 border-t border-gray-50 bg-white">
           <div className="flex items-center gap-3">
+            <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept=".txt,.pdf,.doc,.docx" />
+            <button onClick={() => fileInputRef.current?.click()} disabled={isUploading}
+              className="p-3.5 bg-gray-50 text-gray-400 rounded-xl hover:bg-gray-100 transition-all border border-gray-100 flex items-center justify-center">
+              {isUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            </button>
             <input
               type="text"
               value={input}
@@ -179,6 +226,11 @@ export default function AgentGuide({ agentId, token }: AgentGuideProps) {
               <Send className="w-4 h-4" />
             </button>
           </div>
+          {uploadSuccess && (
+            <div className="flex items-center gap-2 text-emerald-500 text-[10px] font-bold uppercase tracking-widest animate-fade-in">
+              <Check className="w-3 h-3" /> File uploaded & learned!
+            </div>
+          )}
         </div>
       </div>
 

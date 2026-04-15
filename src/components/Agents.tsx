@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Plus, Trash2, Edit2, Check, X, Loader2, BrainCircuit, Upload, FileText, AlertCircle, Layers, User, Zap, Sparkles, Target, RefreshCw, MessageSquare, LayoutDashboard, Settings2, ChevronDown, ChevronUp, Tag, DollarSign, HelpCircle, Globe } from 'lucide-react';
+import { Users, Plus, Trash2, Edit2, Check, X, Loader2, BrainCircuit, Upload, FileText, AlertCircle, Layers, User, Zap, Sparkles, Target, RefreshCw, MessageSquare, LayoutDashboard, Settings2, ChevronDown, ChevronUp, ChevronLeft, Tag, DollarSign, HelpCircle, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch } from '../lib/api';
 import { loadingManager } from '../lib/loading';
@@ -43,6 +43,7 @@ interface Agent {
 interface TrainingFile {
   id: number;
   original_name: string;
+  category: string;
   created_at: string;
 }
 
@@ -72,7 +73,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [activeTrainTab, setActiveTrainTab] = useState<'chat' | 'document' | null>(null);
-  const [hasApiKeys, setHasApiKeys] = useState<boolean>(true);
+  const [uploadCategory, setUploadCategory] = useState<'training' | 'portfolio' | 'rules'>('training');
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importJson, setImportJson] = useState('');
@@ -114,12 +115,8 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
 
   const fetchAgents = async () => {
     try {
-      const [agentsData, settingsCheck] = await Promise.all([
-        apiFetch('/api/agents'),
-        apiFetch('/api/settings/check')
-      ]);
+      const agentsData = await apiFetch('/api/agents');
       setAgents(agentsData);
-      setHasApiKeys(settingsCheck.hasApiKeys);
       setError(null);
     } catch (error: any) {
       setError(`Failed to load agents: ${error.message}`);
@@ -185,10 +182,6 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
 
   const handleSave = async (id?: number) => {
     if (!validateForm()) return;
-    if (!hasApiKeys && !id) {
-      loadingManager.setError('Please add an API key in Settings first.');
-      return;
-    }
     const endpoint = id ? `/api/agents/${id}` : '/api/agents';
     const method = id ? 'PUT' : 'POST';
     try {
@@ -226,6 +219,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
     setIsUploading(true);
     const fd = new FormData();
     fd.append('file', file);
+    fd.append('category', uploadCategory);
     try {
       const response = await fetch(`/api/agents/${agentId}/train-file`, {
         method: 'POST',
@@ -270,30 +264,17 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
     } catch (e) {}
   };
 
-  const handleExport = () => {
-    if (!selectedAgentId) return;
-    const agent = agents.find(a => a.id === selectedAgentId);
-    if (!agent) return;
-
-    const exportData = {
-      name: agent.name,
-      personality: agent.personality,
-      role: agent.role,
-      knowledge_base: agent.knowledge_base,
-      brand_company: agent.brand_company,
-      product_service: agent.product_service,
-      objective: agent.objective,
-      tone: agent.tone,
-      playbook: agent.playbook,
-      others: agent.others,
-      avatar: agent.avatar,
-      strategy: agent.strategy,
-      agent_config: agent.agent_config
-    };
-
-    navigator.clipboard.writeText(JSON.stringify(exportData, null, 2));
-    setExportSuccess(true);
-    setTimeout(() => setExportSuccess(false), 3000);
+  const handleExport = async (id?: number) => {
+    const targetId = id || selectedAgentId;
+    if (!targetId) return;
+    try {
+      const data = await apiFetch(`/api/agents/${targetId}/export`);
+      navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      setExportSuccess(true);
+      setTimeout(() => setExportSuccess(false), 3000);
+    } catch (error: any) {
+      setError('Failed to export agent data');
+    }
   };
 
   const handleImport = async () => {
@@ -301,7 +282,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
     setIsImporting(true);
     try {
       const data = JSON.parse(importJson);
-      const response = await apiFetch('/api/agents', {
+      const response = await apiFetch('/api/agents/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -314,7 +295,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
         setImportJson('');
       }
     } catch (error: any) {
-      alert('Invalid JSON format: ' + error.message);
+      alert('Invalid JSON format or import failed: ' + error.message);
     } finally {
       setIsImporting(false);
     }
@@ -365,27 +346,51 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
   return (
     <div className="min-h-[600px] flex flex-col relative">
       {/* Top Navigation */}
-      <div className="flex items-center px-8 border-b border-gray-100 bg-white/80 backdrop-blur-md sticky top-0 z-20">
-        <div className="flex items-center gap-2 mr-6 pr-6 border-r border-gray-100">
-          <button onClick={() => onNavigate?.('dashboard')} className="p-2 text-gray-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all" title="Dashboard">
-            <LayoutDashboard className="w-5 h-5" />
-          </button>
+      <div className="flex flex-col md:flex-row md:items-center justify-between px-4 md:px-8 border-b border-gray-100 bg-white/80 backdrop-blur-md sticky top-0 z-20">
+        <div className="flex items-center overflow-x-auto no-scrollbar">
+          <div className="flex items-center gap-2 mr-4 md:mr-6 pr-4 md:pr-6 border-r border-gray-100 py-4">
+            <button onClick={() => onNavigate?.('dashboard')} className="p-2 text-gray-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all" title="Dashboard">
+              <LayoutDashboard className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="flex items-center">
+            {[
+              { id: 'agents', label: 'Profile' },
+              { id: 'services', label: 'Services' },
+              { id: 'knowledge', label: 'Knowledge' },
+            ].map(tab => (
+              <button key={tab.id} onClick={() => setActiveSubTab(tab.id as any)}
+                className={`px-4 md:px-6 py-4 text-[10px] md:text-sm font-black uppercase tracking-widest transition-all border-b-2 whitespace-nowrap ${activeSubTab === tab.id ? 'border-primary text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
-        {[
-          { id: 'agents', label: 'Basic Info' },
-          { id: 'services', label: 'Services & Flow' },
-          { id: 'knowledge', label: 'Knowledge' },
-        ].map(tab => (
-          <button key={tab.id} onClick={() => setActiveSubTab(tab.id as any)}
-            className={`px-6 py-4 text-sm font-black uppercase tracking-widest transition-all border-b-2 ${activeSubTab === tab.id ? 'border-primary text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
-            {tab.label}
-          </button>
-        ))}
+        {selectedAgentId && (
+          <div className="md:hidden px-4 py-2 border-t border-gray-50 flex justify-between items-center bg-gray-50/50">
+            <button onClick={() => setSelectedAgentId(null)} className="text-[10px] font-black uppercase tracking-widest text-primary flex items-center gap-1">
+              <ChevronLeft className="w-3 h-3" /> Back to Agents
+            </button>
+            <span className="text-[10px] font-bold text-gray-400 truncate max-w-[150px]">
+              Editing: {agents.find(a => a.id === selectedAgentId)?.name}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 flex overflow-hidden relative z-10">
         {/* Sidebar */}
-        <div className={`w-full md:w-[220px] border-r border-gray-100 flex flex-col bg-white/50 backdrop-blur-sm shrink-0 ${selectedAgentId && activeSubTab === 'agents' ? 'hidden md:flex' : 'flex'}`}>
+        <div className={`w-full md:w-[240px] border-r border-gray-100 flex flex-col bg-white/50 backdrop-blur-sm shrink-0 ${selectedAgentId ? 'hidden md:flex' : 'flex'}`}>
+          <div className="p-3 border-b border-gray-100 flex gap-2">
+            <button onClick={() => setShowImportModal(true)}
+              className="flex-1 py-2.5 bg-white border border-gray-200 text-gray-600 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-gray-50 transition-all">
+              <Upload className="w-3 h-3" /> Import
+            </button>
+            <button onClick={() => setSelectedAgentId(null)}
+              className="flex-1 py-2.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-primary/20">
+              <Plus className="w-3 h-3" /> New
+            </button>
+          </div>
           <div className="flex-1 overflow-y-auto px-3 py-6 space-y-3">
             {agents.map(agent => (
               <div key={agent.id} onClick={() => setSelectedAgentId(agent.id)}
@@ -400,10 +405,16 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                     <p className="text-[10px] text-gray-400 truncate font-medium">{agent.brand_company || 'AI Assistant'}</p>
                   </div>
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); handleDelete(agent.id); }}
-                  className="absolute top-2 right-2 p-1.5 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                <div className="flex items-center gap-2 absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-all">
+                  <button onClick={(e) => { e.stopPropagation(); handleExport(agent.id); }}
+                    className="p-1.5 text-gray-300 hover:text-primary transition-colors" title="Export Agent">
+                    <Layers className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); handleDelete(agent.id); }}
+                    className="p-1.5 text-gray-300 hover:text-red-500 transition-colors" title="Delete Agent">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             ))}
             {agents.length === 0 && (
@@ -413,17 +424,6 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
               </div>
             )}
           </div>
-          {/* Create New */}
-          <div className="p-3 border-t border-gray-100 space-y-2">
-            <button onClick={() => setShowImportModal(true)}
-              className="w-full py-3 bg-white border border-gray-200 text-gray-600 rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-gray-50 transition-all">
-              <Upload className="w-4 h-4" /> Import Agent
-            </button>
-            <button onClick={() => setSelectedAgentId(null)}
-              className="w-full py-3 bg-primary text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-primary/20">
-              <Plus className="w-4 h-4" /> New Agent
-            </button>
-          </div>
         </div>
 
         {/* Main Content */}
@@ -432,17 +432,19 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
           {/* ── BASIC INFO TAB ── */}
           {activeSubTab === 'agents' && (
             <div className="w-full p-6 md:p-10 max-w-3xl mx-auto">
-              <div className="mb-8">
-                <h2 className="text-3xl font-black text-slate-900 tracking-tight">Agent Profile</h2>
-                <p className="text-gray-400 text-sm mt-1">Define who your agent is and what business it represents.</p>
+              <div className="flex items-center justify-between mb-8">
+                <div>
+                  <h2 className="text-3xl font-black text-slate-900 tracking-tight">Agent Profile</h2>
+                  <p className="text-gray-400 text-sm mt-1">Define who your agent is and what business it represents.</p>
+                </div>
               </div>
 
               <div className="space-y-6">
                 {/* Avatar + Name */}
                 <div className="bg-white border border-gray-100 p-8 rounded-3xl shadow-sm space-y-6">
-                  <div className="flex items-start gap-6">
+                  <div className="flex flex-col md:flex-row items-center md:items-start gap-6">
                     {/* Avatar */}
-                    <div className="shrink-0">
+                    <div className="shrink-0 flex flex-col items-center">
                       <div className="relative group/av w-24 h-24 cursor-pointer" onClick={() => avatarInputRef.current?.click()}>
                         <img src={formData.avatar || AVATARS[0]} className="w-24 h-24 rounded-2xl object-cover border-2 border-gray-100" />
                         <div className="absolute inset-0 bg-black/40 rounded-2xl opacity-0 group-hover/av:opacity-100 transition-all flex items-center justify-center">
@@ -450,7 +452,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                         </div>
                       </div>
                       <input type="file" ref={avatarInputRef} className="hidden" onChange={handleAvatarUpload} accept="image/*" />
-                      <div className="flex gap-1.5 mt-2">
+                      <div className="flex gap-1.5 mt-3">
                         {AVATARS.map((url, i) => (
                           <button key={i} onClick={() => setFormData({ ...formData, avatar: url })}
                             className={`w-7 h-7 rounded-lg overflow-hidden border-2 transition-all ${formData.avatar === url ? 'border-primary' : 'border-transparent opacity-40 hover:opacity-100'}`}>
@@ -461,7 +463,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                     </div>
 
                     {/* Name + Company */}
-                    <div className="flex-1 space-y-4">
+                    <div className="flex-1 w-full space-y-4">
                       <div>
                         <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Agent Name *</label>
                         <input type="text" placeholder="e.g. Sara" value={formData.name || ''}
@@ -493,12 +495,12 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                     <div className="flex flex-wrap gap-2">
                       {['Professional', 'Friendly', 'Formal', 'Casual', 'Persuasive', 'Supportive'].map(t => (
                         <button key={t} onClick={() => setFormData({ ...formData, tone: t })}
-                          className={`px-4 py-2 rounded-xl text-xs font-black border transition-all ${formData.tone === t ? 'bg-primary text-white border-primary' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-primary/40'}`}>
+                          className={`px-4 py-2 rounded-xl text-[10px] md:text-xs font-black border transition-all ${formData.tone === t ? 'bg-primary text-white border-primary' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-primary/40'}`}>
                           {t}
                         </button>
                       ))}
-                      <input type="text" placeholder="Custom tone..." value={!['Professional','Friendly','Formal','Casual','Persuasive','Supportive'].includes(formData.tone || '') ? formData.tone || '' : ''}
-                        className="px-4 py-2 rounded-xl text-xs font-bold bg-gray-50 border border-gray-200 outline-none focus:ring-2 focus:ring-primary/20 w-32"
+                      <input type="text" placeholder="Custom..." value={!['Professional','Friendly','Formal','Casual','Persuasive','Supportive'].includes(formData.tone || '') ? formData.tone || '' : ''}
+                        className="px-4 py-2 rounded-xl text-[10px] md:text-xs font-bold bg-gray-50 border border-gray-200 outline-none focus:ring-2 focus:ring-primary/20 w-24 md:w-32"
                         onChange={e => setFormData({ ...formData, tone: e.target.value })} />
                     </div>
                   </div>
@@ -716,12 +718,6 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
 
                   {/* Save */}
                   <div className="flex justify-end items-center gap-4">
-                    {selectedAgentId && (
-                      <button onClick={handleExport}
-                        className={`px-6 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl transition-all flex items-center gap-2 ${exportSuccess ? 'bg-emerald-500 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
-                        {exportSuccess ? <><Check className="w-4 h-4" /> Copied!</> : <><Layers className="w-4 h-4" /> Export JSON</>}
-                      </button>
-                    )}
                     <button onClick={() => handleSave(selectedAgentId)}
                       className={`px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl transition-all flex items-center gap-2 ${saveSuccess ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white hover:bg-primary'}`}>
                       {saveSuccess ? <><Check className="w-4 h-4" /> Saved!</> : <><RefreshCw className="w-4 h-4" /> Save Config</>}
@@ -734,101 +730,162 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
 
           {/* ── KNOWLEDGE TAB ── */}
           {activeSubTab === 'knowledge' && (
-            <div className="w-full max-w-3xl mx-auto p-6 md:p-10">
+            <div className="w-full max-w-4xl mx-auto p-4 md:p-10">
               {!selectedAgentId ? (
                 <div className="flex flex-col items-center justify-center h-80 bg-white border border-gray-100 rounded-3xl text-center">
                   <BrainCircuit className="w-10 h-10 text-gray-200 mb-3" />
                   <p className="text-gray-400 font-black uppercase tracking-widest text-xs">Select an agent first</p>
                 </div>
-              ) : activeTrainTab === null ? (
-                <div className="max-w-2xl mx-auto pt-8">
-                  <div className="text-center mb-10">
-                    <h2 className="text-3xl font-black text-gray-900 tracking-tight mb-2">How do you want to train?</h2>
-                    <p className="text-gray-400 font-medium">Both methods work together — use both for best results</p>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <button onClick={() => setActiveTrainTab('chat')}
-                      className="group p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-primary/40 hover:shadow-xl transition-all text-left w-full max-w-md mx-auto">
-                      <div className="w-14 h-14 bg-primary/5 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-primary transition-all">
-                        <MessageSquare className="w-7 h-7 text-primary group-hover:text-white transition-all" />
-                      </div>
-                      <h3 className="text-xl font-black text-gray-900 mb-2">Train with Chat</h3>
-                      <p className="text-sm text-gray-500 leading-relaxed">Talk to your agent. It learns from your instructions and saves them as memory.</p>
-                      <div className="mt-5 flex items-center gap-2 text-primary font-black text-xs uppercase tracking-widest">Start Training →</div>
-                    </button>
-
-                    <button onClick={() => setActiveTrainTab('document')}
-                      className="group p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-purple-400/40 hover:shadow-xl transition-all text-left w-full max-w-md mx-auto">
-                      <div className="w-14 h-14 bg-purple-50 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-purple-500 transition-all">
-                        <FileText className="w-7 h-7 text-purple-500 group-hover:text-white transition-all" />
-                      </div>
-                      <h3 className="text-xl font-black text-gray-900 mb-2">Train with Document</h3>
-                      <p className="text-sm text-gray-500 leading-relaxed">Upload PDF, Word, or text. Agent reads and extracts all knowledge.</p>
-                      <div className="mt-5 flex items-center gap-2 text-purple-500 font-black text-xs uppercase tracking-widest">Upload File →</div>
-                    </button>
-                  </div>
-                </div>
-              ) : activeTrainTab === 'chat' ? (
-                <div>
-                  <div className="flex items-center gap-3 mb-6">
-                    <button onClick={() => setActiveTrainTab(null)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-400"><X className="w-5 h-5" /></button>
-                    <h2 className="text-xl font-black text-gray-900">Train with Chat</h2>
-                  </div>
-                  <AgentGuide agentId={selectedAgentId} token={token} />
-                </div>
               ) : (
-                <div>
-                  <div className="flex items-center gap-3 mb-6">
-                    <button onClick={() => setActiveTrainTab(null)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-400"><X className="w-5 h-5" /></button>
-                    <h2 className="text-xl font-black text-gray-900">Train with Document</h2>
-                  </div>
-                  <div className="max-w-2xl">
-                    <div onClick={() => fileInputRef.current?.click()}
-                      className="border-2 border-dashed border-gray-200 hover:border-primary/50 rounded-3xl p-12 flex flex-col items-center text-center cursor-pointer hover:bg-primary/5 transition-all group mb-6">
-                      <div className="w-16 h-16 bg-gray-50 group-hover:bg-primary/10 rounded-2xl flex items-center justify-center mb-4 transition-all">
-                        <Upload className="w-8 h-8 text-gray-300 group-hover:text-primary transition-all" />
-                      </div>
-                      <h3 className="text-lg font-black text-gray-700 mb-1">Drop your file here</h3>
-                      <p className="text-sm text-gray-400">PDF, DOC, DOCX, TXT supported</p>
-                      <input type="file" ref={fileInputRef} className="hidden"
-                        onChange={e => selectedAgentId && handleFileUpload(selectedAgentId, e)}
-                        accept=".txt,.pdf,.doc,.docx" />
+                <div className="space-y-8">
+                  {/* Knowledge Sub-Tabs */}
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight">Agent Knowledge</h2>
+                      <p className="text-gray-400 text-sm mt-1">Train your agent with specific data categories.</p>
                     </div>
-                    {isUploading && (
-                      <div className="flex items-center gap-3 p-5 bg-primary/5 text-primary rounded-2xl border border-primary/10 mb-6 animate-pulse">
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                        <span className="text-sm font-black uppercase tracking-widest">Reading & Storing Knowledge...</span>
+                    <div className="flex bg-gray-100 p-1 rounded-2xl self-start">
+                      {(['training', 'portfolio', 'rules'] as const).map(cat => (
+                        <button
+                          key={cat}
+                          onClick={() => {
+                            setUploadCategory(cat);
+                            setActiveTrainTab(null);
+                          }}
+                          className={`px-4 md:px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                            uploadCategory === cat 
+                              ? 'bg-white text-primary shadow-sm' 
+                              : 'text-gray-400 hover:text-gray-600'
+                          }`}
+                        >
+                          {cat}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {activeTrainTab === null ? (
+                    <div className="pt-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <button onClick={() => setActiveTrainTab('chat')}
+                          className="group p-6 md:p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-primary/40 hover:shadow-xl transition-all text-left">
+                          <div className="w-12 h-12 md:w-14 md:h-14 bg-primary/5 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-primary transition-all">
+                            <MessageSquare className="w-6 h-6 md:w-7 md:h-7 text-primary group-hover:text-white transition-all" />
+                          </div>
+                          <h3 className="text-lg md:text-xl font-black text-gray-900 mb-2">Train {uploadCategory} with Chat</h3>
+                          <p className="text-xs md:text-sm text-gray-500 leading-relaxed">Talk to your agent about {uploadCategory}. It learns from your instructions and saves them as memory.</p>
+                          <div className="mt-5 flex items-center gap-2 text-primary font-black text-[10px] md:text-xs uppercase tracking-widest">Start Training →</div>
+                        </button>
+
+                        <button onClick={() => setActiveTrainTab('document')}
+                          className="group p-6 md:p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-purple-400/40 hover:shadow-xl transition-all text-left">
+                          <div className="w-12 h-12 md:w-14 md:h-14 bg-purple-50 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-purple-500 transition-all">
+                            <FileText className="w-6 h-6 md:w-7 md:h-7 text-purple-500 group-hover:text-white transition-all" />
+                          </div>
+                          <h3 className="text-lg md:text-xl font-black text-gray-900 mb-2">Upload {uploadCategory} Document</h3>
+                          <p className="text-xs md:text-sm text-gray-500 leading-relaxed">Upload PDF, Word, or text related to {uploadCategory}. Agent reads and extracts all knowledge.</p>
+                          <div className="mt-5 flex items-center gap-2 text-purple-500 font-black text-[10px] md:text-xs uppercase tracking-widest">Upload File →</div>
+                        </button>
                       </div>
-                    )}
-                    {uploadSuccess && (
-                      <div className="flex items-center gap-3 p-5 bg-emerald-50 text-emerald-600 rounded-2xl border border-emerald-100 mb-6">
-                        <Check className="w-5 h-5" />
-                        <span className="text-sm font-black uppercase tracking-widest">Document processed & stored!</span>
-                      </div>
-                    )}
-                    {trainingFiles.length > 0 && (
-                      <div>
-                        <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Uploaded Documents</h3>
-                        <div className="space-y-3">
-                          {trainingFiles.map(file => (
-                            <div key={file.id} className="flex items-center justify-between bg-white border border-gray-100 p-4 rounded-2xl group shadow-sm">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-purple-50 rounded-xl flex items-center justify-center text-purple-500"><FileText className="w-5 h-5" /></div>
-                                <div>
-                                  <p className="text-sm font-bold text-gray-900 truncate max-w-[200px]">{file.original_name}</p>
-                                  <p className="text-[10px] font-bold text-gray-400 uppercase">{new Date(file.created_at).toLocaleDateString()}</p>
+
+                      {/* Files for this category */}
+                      {trainingFiles.filter(f => f.category === uploadCategory).length > 0 && (
+                        <div className="mt-12">
+                          <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">Existing {uploadCategory} Documents</h3>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {trainingFiles.filter(f => f.category === uploadCategory).map(file => (
+                              <div key={file.id} className="flex items-center justify-between bg-white border border-gray-100 p-4 rounded-2xl group shadow-sm">
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="w-10 h-10 bg-purple-50 rounded-xl flex items-center justify-center text-purple-500 shrink-0"><FileText className="w-5 h-5" /></div>
+                                  <div className="min-w-0">
+                                    <p className="text-sm font-bold text-gray-900 truncate">{file.original_name}</p>
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase">{new Date(file.created_at).toLocaleDateString()}</p>
+                                  </div>
                                 </div>
+                                <button onClick={() => handleDeleteFile(selectedAgentId!, file.id)}
+                                  className="p-2 text-gray-200 hover:text-red-500 hover:bg-red-50 rounded-xl md:opacity-0 group-hover:opacity-100 transition-all">
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
                               </div>
-                              <button onClick={() => handleDeleteFile(selectedAgentId!, file.id)}
-                                className="p-2 text-gray-200 hover:text-red-500 hover:bg-red-50 rounded-xl opacity-0 group-hover:opacity-100 transition-all">
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          ))}
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : activeTrainTab === 'chat' ? (
+                    <div className="bg-white border border-gray-100 rounded-[2.5rem] shadow-xl overflow-hidden">
+                      <div className="flex items-center justify-between p-4 md:p-6 border-b border-gray-50">
+                        <div className="flex items-center gap-3">
+                          <button onClick={() => setActiveTrainTab(null)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-400"><ChevronLeft className="w-5 h-5" /></button>
+                          <div>
+                            <h2 className="text-lg md:text-xl font-black text-gray-900 uppercase tracking-tight">Training: {uploadCategory}</h2>
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Chat with agent to teach it {uploadCategory}</p>
+                          </div>
                         </div>
                       </div>
-                    )}
-                  </div>
+                      <div className="h-[600px]">
+                        <AgentGuide agentId={selectedAgentId} token={token} category={uploadCategory} />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-white border border-gray-100 p-6 md:p-10 rounded-[2.5rem] shadow-xl">
+                      <div className="flex items-center gap-3 mb-8">
+                        <button onClick={() => setActiveTrainTab(null)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-400"><ChevronLeft className="w-5 h-5" /></button>
+                        <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">Upload {uploadCategory}</h2>
+                      </div>
+                      
+                      <div className="max-w-2xl mx-auto">
+                        <div onClick={() => fileInputRef.current?.click()}
+                          className="border-2 border-dashed border-gray-200 hover:border-primary/50 rounded-3xl p-8 md:p-16 flex flex-col items-center text-center cursor-pointer hover:bg-primary/5 transition-all group mb-6">
+                          <div className="w-16 h-16 bg-gray-50 group-hover:bg-primary/10 rounded-2xl flex items-center justify-center mb-4 transition-all">
+                            <Upload className="w-8 h-8 text-gray-300 group-hover:text-primary transition-all" />
+                          </div>
+                          <h3 className="text-lg font-black text-gray-700 mb-1">Drop your {uploadCategory} file here</h3>
+                          <p className="text-sm text-gray-400">PDF, DOC, DOCX, TXT supported</p>
+                          <input type="file" ref={fileInputRef} className="hidden"
+                            onChange={e => selectedAgentId && handleFileUpload(selectedAgentId, e)}
+                            accept=".txt,.pdf,.doc,.docx" />
+                        </div>
+                        
+                        {isUploading && (
+                          <div className="flex items-center gap-3 p-5 bg-primary/5 text-primary rounded-2xl border border-primary/10 mb-6 animate-pulse">
+                            <Loader2 className="w-5 h-5 animate-spin" />
+                            <span className="text-sm font-black uppercase tracking-widest">Processing {uploadCategory} Knowledge...</span>
+                          </div>
+                        )}
+                        
+                        {uploadSuccess && (
+                          <div className="flex items-center gap-3 p-5 bg-emerald-50 text-emerald-600 rounded-2xl border border-emerald-100 mb-6">
+                            <Check className="w-5 h-5" />
+                            <span className="text-sm font-black uppercase tracking-widest">{uploadCategory} stored successfully!</span>
+                          </div>
+                        )}
+
+                        {trainingFiles.filter(f => f.category === uploadCategory).length > 0 && (
+                          <div className="mt-8">
+                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">Uploaded {uploadCategory} Documents</h3>
+                            <div className="space-y-3">
+                              {trainingFiles.filter(f => f.category === uploadCategory).map(file => (
+                                <div key={file.id} className="flex items-center justify-between bg-gray-50 border border-gray-100 p-4 rounded-2xl group">
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-purple-500 shrink-0 shadow-sm"><FileText className="w-5 h-5" /></div>
+                                    <div className="min-w-0">
+                                      <p className="text-sm font-bold text-gray-900 truncate">{file.original_name}</p>
+                                      <p className="text-[10px] font-bold text-gray-400 uppercase">{new Date(file.created_at).toLocaleDateString()}</p>
+                                    </div>
+                                  </div>
+                                  <button onClick={() => handleDeleteFile(selectedAgentId!, file.id)}
+                                    className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all">
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

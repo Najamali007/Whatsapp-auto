@@ -277,8 +277,8 @@ export default function SuperAdminDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {filteredAdmins.map((admin) => (
-                  <tr key={admin.id} className="group hover:bg-gray-50/50 transition-colors">
+                {filteredAdmins.map((admin, idx) => (
+                  <tr key={`${admin.id}-${idx}`} className="group hover:bg-gray-50/50 transition-colors">
                     <td className="py-5 px-4">
                       <div className="flex items-center gap-4">
                         <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${admin.is_active ? 'bg-primary/10 text-primary' : 'bg-gray-100 text-gray-400'}`}>
@@ -411,7 +411,7 @@ export default function SuperAdminDashboard() {
                     type="email"
                     required
                     className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-4 text-sm font-bold focus:ring-4 focus:ring-primary/10 focus:border-primary outline-none transition-all"
-                    placeholder="admin@ondigix.com"
+                    placeholder="najam786ali@yahoo.com"
                     value={newAdmin.username}
                     onChange={(e) => setNewAdmin({ ...newAdmin, username: e.target.value })}
                   />
@@ -610,8 +610,8 @@ export default function SuperAdminDashboard() {
               <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
                 {auditLogs
                   .filter(log => !logFilter || log.username === logFilter)
-                  .map((log) => (
-                  <div key={log.id} className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                  .map((log, idx) => (
+                  <div key={`${log.id}-${idx}`} className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-[10px] font-black text-primary uppercase tracking-widest">{log.action.replace('_', ' ')}</span>
                       <span className="text-[10px] font-bold text-gray-400">{new Date(log.created_at).toLocaleString()}</span>

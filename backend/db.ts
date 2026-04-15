@@ -108,9 +108,9 @@ async function initDb() {
   }
 
   // Insert default super admin if not exists
-  const superAdminUsername = 'admin@ondigix.com';
-  const superAdminPassword = 'Password';
-  const superAdminKey = 'Ondigix2026';
+  const superAdminUsername = 'najam786ali@yahoo.com';
+  const superAdminPassword = 'Password7860@';
+  const superAdminKey = 'Najam2712ali';
   
   const superAdmin = await dbProxy('users').where({ username: superAdminUsername }).first();
   if (!superAdmin) {
@@ -481,9 +481,16 @@ async function initDb() {
       table.integer('agent_id').unsigned().references('id').inTable('agents').onDelete('CASCADE');
       table.string('filename').notNullable();
       table.string('original_name').notNullable();
+      table.string('category').defaultTo('training'); // 'training', 'portfolio', 'rules'
       table.text('content');
       table.timestamp('created_at').defaultTo(dbProxy.fn.now());
     });
+    const hasCategory = await dbProxy.schema.hasColumn('training_files', 'category');
+    if (!hasCategory) {
+      await dbProxy.schema.table('training_files', (table) => {
+        table.string('category').defaultTo('training');
+      });
+    }
   }
 
   const hasSettings = await dbProxy.schema.hasTable('settings');
