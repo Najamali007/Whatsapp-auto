@@ -126,14 +126,6 @@ export async function callAI(userId: number, prompt: string, systemInstruction?:
         await db.prepare('UPDATE settings SET credits_remaining = MAX(0, credits_remaining - 0.01) WHERE id = ?').run(provider.dbId);
       }
 
-      // Consume user token if admin
-      if (user && user.role === 'admin') {
-        await db.prepare('UPDATE users SET tokens = MAX(0, tokens - 1) WHERE id = ?').run(userId);
-        await db.prepare('INSERT INTO audit_logs (user_id, action, details) VALUES (?, ?, ?)')
-          .run(userId, 'token_consumed', `Token consumed for AI call. Remaining: ${user.tokens - 1}`);
-        console.log(`Token consumed for user ${userId}. Remaining: ${user.tokens - 1}`);
-      }
-
       return responseText;
     } catch (error: any) {
       lastError = error;

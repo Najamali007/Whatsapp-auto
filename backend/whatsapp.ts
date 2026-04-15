@@ -973,9 +973,12 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
           break;
         case 'Not Interested':
           stageInstruction = "The user is marked as NOT INTERESTED. Be extremely brief and respectful. Do not push for sales.";
-          return;
+          break;
       }
     }
+
+    // 5. Intent-Based Strategy
+    let intentInstruction = "";
 
     // 8. Intent-Based Strategy & Loop Prevention
     const recentIntents = conversationHistory.map(m => (m as any).intent).filter(Boolean);
@@ -983,12 +986,10 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     const isLooping = intent && recentIntents.slice(0, 5).every(i => i === intent) && recentIntents.length >= 5;
     
     if (isLooping) {
-      console.log(`Loop detected for intent ${intent}. Stopping automated response.`);
-      return;
+      console.log(`Loop detected for intent ${intent}. Continuing anyway as requested.`);
+      intentInstruction += " (Note: You've discussed this topic several times already. Try to pivot or offer a new perspective.)";
     }
 
-    // 5. Intent-Based Strategy
-    let intentInstruction = "";
     if (intent) {
       switch (intent) {
         case 'Inquiry':
@@ -1167,8 +1168,6 @@ BEFORE SENDING, CHECK:
     const roboticPhrases = [
       "i saw you replied",
       "i noticed you replied",
-      "how can i help you today",
-      "how can i assist you today",
       "i am here to help",
       "i saw your message",
       "i saw you replied. how can i help?",
@@ -1176,43 +1175,38 @@ BEFORE SENDING, CHECK:
       "thank you for reaching out",
       "thank you for contacting",
       "thanks for contacting",
-      "how may i help you",
-      "how may i assist you",
-      "hope you are doing well",
-      "assalam-o-alaikum",
-      "assalam o alaikum",
-      "hi ",
-      "hello ",
-      "hey ",
-      "hi!",
-      "hello!",
-      "hey!",
     ];
 
-    const lowerResponse = aiResponse.toLowerCase().trim();
+    let lowerResponse = aiResponse.toLowerCase().trim();
 
-    // Block repeated greetings if agent already greeted today
-    const isRepeatedGreeting = greetedToday && (
-      lowerResponse.startsWith("hi") || 
-      lowerResponse.startsWith("hello") || 
-      lowerResponse.startsWith("hey") || 
-      lowerResponse.startsWith("assalam")
-    );
+    // If agent already greeted today, and AI still starts with a greeting, strip it instead of blocking
+    if (greetedToday) {
+      const greetings = ["hi", "hello", "hey", "assalam-o-alaikum", "assalam o alaikum", "assalam"];
+      for (const g of greetings) {
+        if (lowerResponse.startsWith(g)) {
+          // Strip the greeting part from the original response to preserve casing for the rest
+          const regex = new RegExp(`^${g}[\\s,!]*`, 'i');
+          aiResponse = aiResponse.replace(regex, '').trim();
+          // Capitalize first letter of remaining text
+          if (aiResponse.length > 0) {
+            aiResponse = aiResponse.charAt(0).toUpperCase() + aiResponse.slice(1);
+          }
+          break;
+        }
+      }
+    }
 
-    // Block if it contains robotic meta-commentary
-    const containsRoboticPhrase = isRepeatedGreeting || roboticPhrases.some(phrase => lowerResponse.includes(phrase));
+    const containsRoboticPhrase = roboticPhrases.some(phrase => lowerResponse.includes(phrase));
 
-    const isDuplicate = containsRoboticPhrase || recentAgentMessages.some(m => {
-      const s1 = lowerResponse;
+    const isDuplicate = recentAgentMessages.some(m => {
+      const s1 = aiResponse.toLowerCase().trim();
       const s2 = m.content.toLowerCase().trim();
-      // Only block if EXACT match or very short and similar
-      return s1 === s2 || (s1.length < 15 && s2.length < 15 && (s1.includes(s2) || s2.includes(s1)));
+      return s1 === s2 && s1.length > 0;
     });
 
-    if (isDuplicate) {
-      console.log("Duplicate or robotic response detected, skipping send or retrying...");
-      // Optionally we could retry with a different prompt, but for now we just skip to avoid annoying the user
-      return;
+    if (isDuplicate || containsRoboticPhrase) {
+      console.log(`[REPETITION/ROBOTIC] Detected but sending anyway to avoid stopping. Content: "${aiResponse}"`);
+      // We don't return anymore, we let it through but we've tried to clean it
     }
 
     // 11. Smart Response Timing (Simulate human typing: 5-7 seconds as requested)
@@ -1223,8 +1217,10 @@ BEFORE SENDING, CHECK:
     await sock.sendPresenceUpdate('paused', conversation.contact_number);
 
     // Send message via WhatsApp
+    let replySent = false;
     if (aiResponse) {
       await sock.sendMessage(conversation.contact_number, { text: aiResponse });
+      replySent = true;
     }
 
     // Handle file sending if detected
@@ -1248,10 +1244,17 @@ BEFORE SENDING, CHECK:
             });
           }
           console.log(`Sent file ${fileToSend.original_name} to ${conversation.contact_number}`);
+          replySent = true;
         } catch (fileErr: any) {
           console.error(`Failed to send file ${fileToSend.original_name}:`, fileErr.message);
         }
       }
+    }
+
+    // 12. Consume Token (1 reply = 1 token)
+    if (replySent && user && user.role === 'admin') {
+      await db.prepare('UPDATE users SET tokens = MAX(0, tokens - 1) WHERE id = ?').run(session.user_id);
+      console.log(`Token consumed for agent reply to ${conversation.contact_number}. User: ${session.user_id}`);
     }
 
     // Update Timestamps
