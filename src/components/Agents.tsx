@@ -766,19 +766,21 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
 
                   {activeTrainTab === null ? (
                     <div className="pt-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <button onClick={() => setActiveTrainTab('chat')}
-                          className="group p-6 md:p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-primary/40 hover:shadow-xl transition-all text-left">
-                          <div className="w-12 h-12 md:w-14 md:h-14 bg-primary/5 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-primary transition-all">
-                            <MessageSquare className="w-6 h-6 md:w-7 md:h-7 text-primary group-hover:text-white transition-all" />
-                          </div>
-                          <h3 className="text-lg md:text-xl font-black text-gray-900 mb-2">Train {uploadCategory} with Chat</h3>
-                          <p className="text-xs md:text-sm text-gray-500 leading-relaxed">Talk to your agent about {uploadCategory}. It learns from your instructions and saves them as memory.</p>
-                          <div className="mt-5 flex items-center gap-2 text-primary font-black text-[10px] md:text-xs uppercase tracking-widest">Start Training →</div>
-                        </button>
+                      <div className={`grid grid-cols-1 ${uploadCategory === 'training' ? 'md:grid-cols-2' : ''} gap-6`}>
+                        {uploadCategory === 'training' && (
+                          <button onClick={() => setActiveTrainTab('chat')}
+                            className="group p-6 md:p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-primary/40 hover:shadow-xl transition-all text-left">
+                            <div className="w-12 h-12 md:w-14 md:h-14 bg-primary/5 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-primary transition-all">
+                              <MessageSquare className="w-6 h-6 md:w-7 md:h-7 text-primary group-hover:text-white transition-all" />
+                            </div>
+                            <h3 className="text-lg md:text-xl font-black text-gray-900 mb-2">Train {uploadCategory} with Chat</h3>
+                            <p className="text-xs md:text-sm text-gray-500 leading-relaxed">Talk to your agent about {uploadCategory}. It learns from your instructions and saves them as memory.</p>
+                            <div className="mt-5 flex items-center gap-2 text-primary font-black text-[10px] md:text-xs uppercase tracking-widest">Start Training →</div>
+                          </button>
+                        )}
 
                         <button onClick={() => setActiveTrainTab('document')}
-                          className="group p-6 md:p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-purple-400/40 hover:shadow-xl transition-all text-left">
+                          className={`group p-6 md:p-8 bg-white border-2 border-gray-100 rounded-3xl hover:border-purple-400/40 hover:shadow-xl transition-all text-left ${uploadCategory !== 'training' ? 'max-w-xl mx-auto w-full' : ''}`}>
                           <div className="w-12 h-12 md:w-14 md:h-14 bg-purple-50 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-purple-500 transition-all">
                             <FileText className="w-6 h-6 md:w-7 md:h-7 text-purple-500 group-hover:text-white transition-all" />
                           </div>

@@ -584,17 +584,21 @@ async function extractAndStoreMemory(
   userMessage: string,
   agentResponse: string
 ): Promise<void> {
-  const extractPrompt = `Extract key knowledge from this training message to store permanently.
-
+  const extractPrompt = `Extract ALL key knowledge, rules, and facts from this training message to store permanently.
+  
 Trainer said: "${userMessage}"
 
 Rules for extraction:
+- Capture ANY specific instruction, fact, or rule shared by the trainer.
+- If it's a Q&A instruction ("if asked X, say Y") — topic: "qa_[keyword]", content: full instruction
+- If it's a business rule or policy — topic: "rule_[description]", content: the full rule
+- If it's product, pricing, or service info — topic: "info_[topic]", content: exact details
 - If it contains a link (http/https) — topic: "link_[description]", content: the full URL
 - If it contains a file name or portfolio — topic: "portfolio_[person_name]", content: exact filename/link
-- If it's a Q&A instruction ("if asked X, say Y") — topic: "qa_[keyword]", content: full instruction
-- If it's product/pricing info — topic: "pricing" or "product_info", content: exact info
-- If it's a greeting/style rule — topic: "communication_style", content: the rule
-- action: "store" for new, "update" if topic likely exists, "skip" if just casual chat
+- If it's a communication style or tone rule — topic: "style", content: the rule
+- action: "store" for new info, "update" if topic likely exists, "skip" if no useful knowledge is found.
+
+Be aggressive in capturing knowledge. If the trainer is teaching something, it MUST be stored.
 
 Respond ONLY in JSON:
 {

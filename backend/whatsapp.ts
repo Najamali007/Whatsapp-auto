@@ -979,7 +979,8 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
 
     // 8. Intent-Based Strategy & Loop Prevention
     const recentIntents = conversationHistory.map(m => (m as any).intent).filter(Boolean);
-    const isLooping = intent && recentIntents.filter(i => i === intent).length >= 3;
+    // Relaxed loop prevention: only stop if the EXACT same intent repeats 5 times in a row
+    const isLooping = intent && recentIntents.slice(0, 5).every(i => i === intent) && recentIntents.length >= 5;
     
     if (isLooping) {
       console.log(`Loop detected for intent ${intent}. Stopping automated response.`);
@@ -1103,7 +1104,7 @@ STAGE & CONTEXT:
 ${stageInstruction}
 ${intentInstruction}
 ${lastAgentAskedQuestion ? `Your last message asked a question. Client just answered it. Now give relevant details — do NOT repeat the question.` : ''}
-${isAck ? `Client said ok/thanks — reply "You're welcome! 😊" and nothing else.` : ''}
+${isAck ? `Client said ok/thanks/closing — reply with a brief acknowledgment like "You're welcome!", "Ok!", or "Got it!" and nothing else. Do not continue the sales pitch.` : ''}
 ${greetingRule}
 
 ═══════════════════════════════
@@ -1204,8 +1205,8 @@ BEFORE SENDING, CHECK:
     const isDuplicate = containsRoboticPhrase || recentAgentMessages.some(m => {
       const s1 = lowerResponse;
       const s2 = m.content.toLowerCase().trim();
-      // Exact match or very high similarity
-      return s1 === s2 || (s1.length > 10 && s2.length > 10 && (s1.includes(s2) || s2.includes(s1)));
+      // Only block if EXACT match or very short and similar
+      return s1 === s2 || (s1.length < 15 && s2.length < 15 && (s1.includes(s2) || s2.includes(s1)));
     });
 
     if (isDuplicate) {
@@ -1214,8 +1215,9 @@ BEFORE SENDING, CHECK:
       return;
     }
 
-    // 11. Smart Response Timing (Simulate human typing)
-    const typingDelay = Math.min(Math.max(aiResponse.length * 50, 2000), 8000); // 2-8 seconds based on length
+    // 11. Smart Response Timing (Simulate human typing: 5-7 seconds as requested)
+    const typingDelay = Math.floor(Math.random() * (7000 - 5000 + 1)) + 5000; 
+    console.log(`Waiting ${typingDelay}ms before sending response...`);
     await sock.sendPresenceUpdate('composing', conversation.contact_number);
     await new Promise(resolve => setTimeout(resolve, typingDelay));
     await sock.sendPresenceUpdate('paused', conversation.contact_number);
