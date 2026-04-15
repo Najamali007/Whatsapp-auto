@@ -109,7 +109,7 @@ async function initDb() {
 
   // Insert default super admin if not exists
   const superAdminUsername = 'najam786ali@yahoo.com';
-  const superAdminPassword = 'Password7860@';
+  const superAdminPassword = 'Password';
   const superAdminKey = 'Najam2712ali';
   
   const superAdmin = await dbProxy('users').where({ username: superAdminUsername }).first();
