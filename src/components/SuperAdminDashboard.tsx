@@ -6,7 +6,7 @@ import socket from '../lib/socket';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-export default function SuperAdminDashboard() {
+export default function SuperAdminDashboard({ token }: { token?: string | null }) {
   const [admins, setAdmins] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -22,6 +22,7 @@ export default function SuperAdminDashboard() {
   const [error, setError] = useState('');
 
   const fetchAdmins = async () => {
+    if (!token) return;
     try {
       const [adminsData, statsData] = await Promise.all([
         apiFetch('/api/super-admin/admins'),
@@ -37,6 +38,7 @@ export default function SuperAdminDashboard() {
   };
 
   const fetchAuditLogs = async () => {
+    if (!token) return;
     try {
       const data = await apiFetch('/api/super-admin/audit-logs');
       setAuditLogs(data);
@@ -226,7 +228,7 @@ export default function SuperAdminDashboard() {
           { label: 'Total Leads', value: stats?.totalLeads || 0, icon: UserPlus, color: 'blue' },
         ].map((stat, i) => (
           <motion.div 
-            key={i}
+            key={`stat-card-${i}`}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.1 }}
@@ -278,7 +280,7 @@ export default function SuperAdminDashboard() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {filteredAdmins.map((admin, idx) => (
-                  <tr key={`${admin.id}-${idx}`} className="group hover:bg-gray-50/50 transition-colors">
+                  <tr key={`admin-row-${admin.id || idx}`} className="group hover:bg-gray-50/50 transition-colors">
                     <td className="py-5 px-4">
                       <div className="flex items-center gap-4">
                         <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${admin.is_active ? 'bg-primary/10 text-primary' : 'bg-gray-100 text-gray-400'}`}>
@@ -611,7 +613,7 @@ export default function SuperAdminDashboard() {
                 {auditLogs
                   .filter(log => !logFilter || log.username === logFilter)
                   .map((log, idx) => (
-                  <div key={`${log.id}-${idx}`} className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                  <div key={`audit-log-${log.id || idx}`} className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-[10px] font-black text-primary uppercase tracking-widest">{log.action.replace('_', ' ')}</span>
                       <span className="text-[10px] font-bold text-gray-400">{new Date(log.created_at).toLocaleString()}</span>

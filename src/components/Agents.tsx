@@ -13,6 +13,7 @@ interface Service {
   pricing: 'allowed' | 'not_allowed';
   price_details?: string;
   custom_reply?: string;
+  portfolio_file?: string;
 }
 
 interface AgentConfig {
@@ -230,8 +231,13 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
         fetchTrainingFiles(agentId);
         setUploadSuccess(true);
         setTimeout(() => setUploadSuccess(false), 3000);
+      } else {
+        const errData = await response.json();
+        alert(`Upload failed: ${errData.error || 'Unknown error'}`);
       }
-    } catch (e) {}
+    } catch (e: any) {
+      alert(`Upload error: ${e.message}`);
+    }
     finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -304,7 +310,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
   // ── Services Builder helpers ──────────────────────────────
   const addService = () => {
     const id = `svc_${Date.now()}`;
-    const newSvc: Service = { id, name: '', keywords: [], ask_for: '', pricing: 'not_allowed', price_details: '', custom_reply: '' };
+    const newSvc: Service = { id, name: '', keywords: [], ask_for: '', pricing: 'not_allowed', price_details: '', custom_reply: '', portfolio_file: '' };
     setAgentConfig(prev => ({ ...prev, services: [...prev.services, newSvc] }));
     setExpandedService(id);
   };
@@ -709,6 +715,26 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                                   className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20 resize-none"
                                   onChange={e => updateService(svc.id, 'custom_reply', e.target.value)} />
                               </div>
+
+                              {/* Portfolio Selection */}
+                              <div>
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 flex items-center gap-2">
+                                  <FileText className="w-3 h-3" /> Portfolio to Send (optional)
+                                </label>
+                                <select 
+                                  value={svc.portfolio_file || ''}
+                                  className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                                  onChange={e => updateService(svc.id, 'portfolio_file', e.target.value)}
+                                >
+                                  <option value="">— No Portfolio —</option>
+                                  {trainingFiles.filter(f => f.category === 'portfolio').map(file => (
+                                    <option key={file.id} value={file.original_name}>
+                                      {file.original_name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <p className="text-[10px] text-gray-400 mt-1">If this service is triggered, this portfolio file will be sent automatically.</p>
+                              </div>
                             </motion.div>
                           )}
                         </AnimatePresence>
@@ -791,9 +817,9 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                       </div>
 
                       {/* Files for this category */}
-                      {trainingFiles.filter(f => f.category === uploadCategory).length > 0 && (
-                        <div className="mt-12">
-                          <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">Existing {uploadCategory} Documents</h3>
+                      <div className="mt-12">
+                        <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">Existing {uploadCategory} Documents</h3>
+                        {trainingFiles.filter(f => f.category === uploadCategory).length > 0 ? (
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {trainingFiles.filter(f => f.category === uploadCategory).map(file => (
                               <div key={file.id} className="flex items-center justify-between bg-white border border-gray-100 p-4 rounded-2xl group shadow-sm">
@@ -811,8 +837,13 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                               </div>
                             ))}
                           </div>
-                        </div>
-                      )}
+                        ) : (
+                          <div className="bg-gray-50/50 border border-dashed border-gray-200 rounded-3xl p-8 text-center">
+                            <FileText className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">No {uploadCategory} files added yet</p>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ) : activeTrainTab === 'chat' ? (
                     <div className="bg-white border border-gray-100 rounded-[2.5rem] shadow-xl overflow-hidden">

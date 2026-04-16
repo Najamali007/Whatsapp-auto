@@ -66,12 +66,12 @@ export async function validateDeepSeekKey(apiKey: string) {
   }
 }
 
-export async function callAI(userId: number, prompt: string, systemInstruction?: string, media?: any) {
-  console.log(`AI Engine v1.1 starting for user ${userId}...`);
+export async function callAI(userId: number, prompt: string, systemInstruction?: string, media?: any, systemOnly: boolean = false) {
+  console.log(`AI Engine v1.1 starting for user ${userId}... (SystemOnly: ${systemOnly})`);
   
   // 1. Token Check for regular admins
   const user = await db.prepare('SELECT id, role, tokens FROM users WHERE id = ?').get(userId) as any;
-  if (user && user.role === 'admin') {
+  if (user && user.role === 'admin' && !systemOnly) {
     if ((user.tokens || 0) <= 0) {
       throw new Error('Insufficient tokens. Please contact system administrator to top up your account.');
     }
@@ -81,16 +81,18 @@ export async function callAI(userId: number, prompt: string, systemInstruction?:
   
   const providersToTry: { id: string, key: string, dbId?: number, source: string }[] = [];
   
-  // 1. User DeepSeek
-  const userDeepSeek = keys.find(k => k.provider === 'deepseek');
-  if (userDeepSeek?.api_key && userDeepSeek.api_key.length > 10 && !userDeepSeek.api_key.includes('TODO')) {
-    providersToTry.push({ id: 'deepseek', key: userDeepSeek.api_key, dbId: userDeepSeek.id, source: 'User' });
-  }
+  if (!systemOnly) {
+    // 1. User DeepSeek
+    const userDeepSeek = keys.find(k => k.provider === 'deepseek');
+    if (userDeepSeek?.api_key && userDeepSeek.api_key.length > 10 && !userDeepSeek.api_key.includes('TODO')) {
+      providersToTry.push({ id: 'deepseek', key: userDeepSeek.api_key, dbId: userDeepSeek.id, source: 'User' });
+    }
 
-  // 2. User Gemini
-  const userGemini = keys.find(k => k.provider === 'gemini');
-  if (userGemini?.api_key && userGemini.api_key.length > 10 && !userGemini.api_key.includes('TODO')) {
-    providersToTry.push({ id: 'gemini', key: userGemini.api_key, dbId: userGemini.id, source: 'User' });
+    // 2. User Gemini
+    const userGemini = keys.find(k => k.provider === 'gemini');
+    if (userGemini?.api_key && userGemini.api_key.length > 10 && !userGemini.api_key.includes('TODO')) {
+      providersToTry.push({ id: 'gemini', key: userGemini.api_key, dbId: userGemini.id, source: 'User' });
+    }
   }
 
   // 3. System DeepSeek (from env)
@@ -119,7 +121,7 @@ export async function callAI(userId: number, prompt: string, systemInstruction?:
       if (provider.id === 'deepseek') {
         responseText = await callDeepSeek(provider.key, prompt, systemInstruction);
       } else {
-        responseText = await callGemini(provider.key, prompt, systemInstruction);
+        responseText = await callGemini(provider.key, prompt, systemInstruction, media);
       }
 
       if (provider.dbId) {
@@ -158,12 +160,21 @@ export async function callAI(userId: number, prompt: string, systemInstruction?:
   throw new Error(`All AI providers failed. Last error: ${lastError?.message || 'Unknown error'}. Please check your API keys in Settings.`);
 }
 
-async function callGemini(apiKey: string, prompt: string, systemInstruction?: string) {
+async function callGemini(apiKey: string, prompt: string, systemInstruction?: string, media?: any) {
   try {
     const ai = new GoogleGenAI({ apiKey });
+    
+    const contents: any[] = [];
+    if (media && media.inlineData) {
+      contents.push({
+        inlineData: media.inlineData
+      });
+    }
+    contents.push({ text: prompt });
+
     const response = await ai.models.generateContent({
       model: "gemini-1.5-flash",
-      contents: prompt,
+      contents: contents,
       config: {
         systemInstruction: systemInstruction,
       },
@@ -526,10 +537,51 @@ export async function trainAgentWithChat(
   userId: number,
   agentId: number,
   userMessage: string,
-  chatHistory: { role: string; content: string }[]
+  chatHistory: { role: string; content: string }[],
+  category: string = 'training'
 ): Promise<string> {
   const agent = await db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId) as any;
   if (!agent) throw new Error('Agent not found');
+
+  const lowerMsg = userMessage.toLowerCase().trim();
+  
+  // Heuristic for direct instruction (Smart local learning without API)
+  const isInstruction = 
+    lowerMsg.startsWith('always') || 
+    lowerMsg.startsWith('never') || 
+    lowerMsg.startsWith('rule:') || 
+    lowerMsg.startsWith('remember') || 
+    lowerMsg.startsWith('portfolio:') ||
+    lowerMsg.startsWith('service:') ||
+    (lowerMsg.length < 200 && !lowerMsg.includes('?') && !lowerMsg.startsWith('what') && !lowerMsg.startsWith('how') && !lowerMsg.startsWith('why'));
+
+  if (isInstruction) {
+    console.log(`[LOCAL TRAINING] Direct instruction detected: "${userMessage}"`);
+    const words = userMessage.split(' ');
+    const prefix = category === 'rules' ? 'rule_' : (category === 'portfolio' ? 'portfolio_' : '');
+    const topic = prefix + words.slice(0, 3).join('_').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() || 'instruction';
+    
+    const existing = await db.prepare(
+      'SELECT id FROM agent_memory WHERE agent_id = ? AND topic = ?'
+    ).get(agentId, topic) as any;
+
+    if (existing) {
+      await db.prepare('UPDATE agent_memory SET content = ?, source = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .run(userMessage, 'chat', existing.id);
+    } else {
+      await db.prepare('INSERT INTO agent_memory (agent_id, topic, content, source) VALUES (?, ?, ?, ?)')
+        .run(agentId, topic, userMessage, 'chat');
+    }
+
+    const acknowledgments = [
+      "Got it! I've added this to my internal knowledge base. I'll remember this.",
+      "Understood. I've stored this instruction in my memory.",
+      "Makes sense. I've updated my rules with this information.",
+      "Noted. I'll follow this instruction in future conversations.",
+      "I've remembered that. My knowledge base is now updated."
+    ];
+    return acknowledgments[Math.floor(Math.random() * acknowledgments.length)];
+  }
 
   // Load all existing memories
   const memories = await db.prepare(
@@ -543,6 +595,7 @@ export async function trainAgentWithChat(
   const recentChats = chatHistory.slice(-10);
 
   const systemPrompt = `You are ${agent.name || 'an AI assistant'} — being trained right now by your owner.
+Category: ${category.toUpperCase()}
 
 YOUR IDENTITY:
 - Name: ${agent.name}
@@ -565,8 +618,8 @@ RULES FOR THIS TRAINING SESSION:
 - NEVER make up info not in your memory
 - If info contradicts old memory — confirm the UPDATE: "Updated! I'll now use [new info] instead of [old info]"`;
 
-  const response = await callAI(userId, userMessage, systemPrompt);
-  await extractAndStoreMemory(userId, agentId, userMessage, response);
+  const response = await callAI(userId, userMessage, systemPrompt, null, true); // systemOnly = true
+  await extractAndStoreMemory(userId, agentId, userMessage, response, category);
   return response;
 }
 
@@ -574,14 +627,18 @@ async function extractAndStoreMemory(
   userId: number,
   agentId: number,
   userMessage: string,
-  agentResponse: string
+  agentResponse: string,
+  category: string = 'training'
 ): Promise<void> {
   const extractPrompt = `Extract ALL key knowledge, rules, and facts from this training message to store permanently.
   
 Trainer said: "${userMessage}"
+Context Category: ${category.toUpperCase()}
 
 Rules for extraction:
 - Capture ANY specific instruction, fact, or rule shared by the trainer.
+- If category is "rules", prefix topics with "rule_".
+- If category is "portfolio", prefix topics with "portfolio_".
 - If it's a Q&A instruction ("if asked X, say Y") — topic: "qa_[keyword]", content: full instruction
 - If it's a business rule or policy — topic: "rule_[description]", content: the full rule
 - If it's product, pricing, or service info — topic: "info_[topic]", content: exact details
@@ -649,20 +706,39 @@ export async function trainAgentWithDocument(
   const agent = await db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId) as any;
   if (!agent) throw new Error('Agent not found');
 
-  // Extract structured knowledge from document
-  const extractPrompt = `You are processing a ${category} document for an AI agent.
+  // Special handling for Portfolio category
+  if (category === 'portfolio') {
+    const topic = `portfolio_${filename.replace(/\.[^/.]+$/, "").replace(/\s+/g, "_").toLowerCase()}`;
+    const content = `I have a portfolio file named "${filename}". If a client asks for my work, portfolio, or samples related to this, I should send it using [SEND_FILE: ${filename}].`;
+    
+    const existing = await db.prepare(
+      'SELECT id FROM agent_memory WHERE agent_id = ? AND topic = ?'
+    ).get(agentId, topic) as any;
+
+    if (existing) {
+      await db.prepare('UPDATE agent_memory SET content = ?, source = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .run(content, 'document', existing.id);
+    } else {
+      await db.prepare('INSERT INTO agent_memory (agent_id, topic, content, source) VALUES (?, ?, ?, ?)')
+        .run(agentId, topic, content, 'document');
+    }
+    return `Portfolio file "${filename}" has been registered in my memory.`;
+  }
+
+  // Extract structured knowledge from document (Training or Rules)
+  const extractPrompt = `You are processing a ${category.toUpperCase()} document for an AI agent.
   
 Document: "${filename}"
-Category: ${category}
+Category: ${category.toUpperCase()}
 Content:
 ${documentContent.substring(0, 8000)}
 
-Extract ALL important knowledge as structured memories.
+${category === 'rules' ? 'STRICT: This document contains RULES. Extract every single rule, policy, and instruction exactly as stated.' : 'Extract ALL important knowledge as structured memories.'}
 Respond ONLY in JSON:
 {
   "summary": "one line summary of what this document teaches",
   "memories": [
-    {"topic": "short label", "content": "exact info to remember"}
+    {"topic": "${category === 'rules' ? 'rule_' : ''}short_label", "content": "exact info to remember"}
   ]
 }`;
 

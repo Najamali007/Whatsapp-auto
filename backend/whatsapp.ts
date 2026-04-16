@@ -32,6 +32,16 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+function isValidJid(jid: string): boolean {
+  if (!jid || jid === 'status@broadcast') return false;
+  const number = jid.split('@')[0];
+  // Filter out obviously fake/demo numbers
+  const fakeNumbers = ['1234567890', '0000000000', '1111111111', '12345', '9999999999'];
+  if (fakeNumbers.includes(number)) return false;
+  if (number.length < 5) return false;
+  return true;
+}
+
 export async function connectToWhatsApp(sessionId: string, io: SocketIOServer, force: boolean = false) {
   if (force) {
     console.log(`Force reconnecting session ${sessionId}, clearing session directory`);
@@ -230,10 +240,25 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer, f
       await db.exec('BEGIN TRANSACTION');
       const insertConv = await db.prepare('INSERT OR IGNORE INTO conversations (session_id, contact_number, contact_name, last_message_at) VALUES (?, ?, ?, ?)');
       for (const chat of chats) {
-        if (chat.id === 'status@broadcast') continue;
+        if (!isValidJid(chat.id)) continue;
         await insertConv.run(sessionId, chat.id, chat.name || null, new Date().toISOString());
       }
       await db.exec('COMMIT');
+
+      // Fetch profile pictures in background
+      setTimeout(async () => {
+        const convs = await db.prepare('SELECT contact_number, id FROM conversations WHERE session_id = ? AND profile_pic IS NULL').all(sessionId) as any[];
+        for (const conv of convs) {
+          try {
+            const ppUrl = await sock.profilePictureUrl(conv.contact_number);
+            if (ppUrl) {
+              await db.prepare('UPDATE conversations SET profile_pic = ? WHERE id = ?').run(ppUrl, conv.id);
+              await db.prepare('UPDATE contacts SET profile_pic = ? WHERE jid = ?').run(ppUrl, conv.contact_number);
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Rate limit
+          } catch (e) {}
+        }
+      }, 5000);
 
       // Sync messages/conversations (REAL-TIME FOCUS: Only sync very recent messages from history)
       io.emit('sync_status', { sessionId, sessionName, status: 'syncing', progress: 10, message: 'Syncing recent messages...' });
@@ -439,7 +464,7 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
           const base64Audio = buffer!.toString('base64');
           const transcription = await callAI(session.user_id, "Transcribe this audio message. Return only the transcription text. If it's empty or noise, return an empty string.", "", {
             inlineData: {
-              mimeType: "audio/mpeg",
+              mimeType: "audio/ogg",
               data: base64Audio
             }
           });
@@ -605,7 +630,7 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
         is_autopilot: updatedConv.is_autopilot
       });
     }
-    return { id: messageId, conversationId: conversation.id, text, type, timestamp };
+    return { id: messageId, conversationId: conversation.id, text, type, timestamp, transcription: (msg as any).transcription || null };
   }
   return null;
 }
@@ -628,11 +653,13 @@ async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: pro
       
       for (const rule of rules) {
         let triggered = false;
+        const triggerText = (savedMsg.type === 'audio' && savedMsg.transcription) ? savedMsg.transcription : savedMsg.text;
+        
         if (rule.trigger_type === 'url_shared') {
           const urlRegex = /(https?:\/\/[^\s]+)/g;
-          triggered = urlRegex.test(savedMsg.text);
+          triggered = urlRegex.test(triggerText);
         } else if (rule.trigger_type === 'keyword_match') {
-          triggered = savedMsg.text.toLowerCase().includes(rule.trigger_value.toLowerCase());
+          triggered = triggerText.toLowerCase().includes(rule.trigger_value.toLowerCase());
         } else if (rule.trigger_type === 'sender_match') {
           triggered = from === rule.trigger_value;
         }
@@ -657,6 +684,21 @@ async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: pro
   
   // Reset followup_count on incoming message
   await db.prepare("UPDATE leads SET followup_count = 0 WHERE conversation_id = ?").run(savedMsg.conversationId);
+
+  // Update conversation last message and profile pic
+  await db.prepare('UPDATE conversations SET last_message = ?, last_message_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(savedMsg.text, savedMsg.conversationId);
+
+  // Try to fetch profile pic if not exists
+  if (!conversation.profile_pic) {
+    try {
+      const ppUrl = await sock.profilePictureUrl(from);
+      if (ppUrl) {
+        await db.prepare('UPDATE conversations SET profile_pic = ? WHERE id = ?').run(ppUrl, savedMsg.conversationId);
+        await db.prepare('UPDATE contacts SET profile_pic = ? WHERE jid = ?').run(ppUrl, from);
+      }
+    } catch (e) {}
+  }
 
   // Fetch session info for user_id
   const sessionInfo = await db.prepare('SELECT user_id FROM whatsapp_sessions WHERE id = ?').get(sessionId) as any;
@@ -753,7 +795,8 @@ async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: pro
   const isGlobalAutopilot = user ? user.is_global_autopilot : 1;
 
   if (!ruleTriggered && isGlobalAutopilot && conversation && conversation.is_autopilot) {
-    await processAIResponse(sessionId, sock, conversation, savedMsg.text, io);
+    const aiInput = savedMsg.type === 'audio' && savedMsg.transcription ? `[Audio Transcription]: ${savedMsg.transcription}` : savedMsg.text;
+    await processAIResponse(sessionId, sock, conversation, aiInput, io);
   }
 
   // Extract lead info in the background
@@ -840,6 +883,35 @@ PRICING RULE: ${config.no_pricing_message || 'Share pricing only if allowed for 
 FALLBACK: ${config.fallback_message || 'Ask for clarification if confused.'}`;
 }
 
+
+async function sendFile(sock: WASocket, contactNumber: string, fileRecord: any) {
+  const filePath = path.join(process.cwd(), 'uploads', fileRecord.filename);
+  if (fs.existsSync(filePath)) {
+    const fileExt = path.extname(fileRecord.original_name).toLowerCase();
+    const isImage = ['.jpg', '.jpeg', '.png', '.webp'].includes(fileExt);
+    
+    try {
+      if (isImage) {
+        await sock.sendMessage(contactNumber, { 
+          image: fs.readFileSync(filePath), 
+          caption: fileRecord.original_name 
+        });
+      } else {
+        await sock.sendMessage(contactNumber, { 
+          document: fs.readFileSync(filePath), 
+          fileName: fileRecord.original_name,
+          mimetype: 'application/octet-stream'
+        });
+      }
+      console.log(`Sent file ${fileRecord.original_name} to ${contactNumber}`);
+      return true;
+    } catch (fileErr: any) {
+      console.error(`Failed to send file ${fileRecord.original_name}:`, fileErr.message);
+      return false;
+    }
+  }
+  return false;
+}
 
 async function processAIResponse(sessionId: string, sock: WASocket, conversation: any, userMessage: string, io: SocketIOServer) {
   try {
@@ -1054,15 +1126,43 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     } catch(e) {}
 
     // Service-specific custom reply check
-    if (detectedService?.custom_reply) {
-      // Send fixed reply directly
+    if (detectedService?.custom_reply || detectedService?.portfolio_file) {
       const timestamp = new Date().toISOString();
-      await sock.sendMessage(conversation.contact_number, { text: detectedService.custom_reply });
-      await db.prepare('INSERT INTO messages (conversation_id, sender, content, type, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(conversation.id, 'agent', detectedService.custom_reply, 'text', timestamp);
-      await db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversation.id);
-      io.emit('new_message', { conversation_id: conversation.id, sender: 'agent', content: detectedService.custom_reply, type: 'text', created_at: timestamp });
-      return;
+      let replySent = false;
+
+      if (detectedService.custom_reply) {
+        await sock.sendMessage(conversation.contact_number, { text: detectedService.custom_reply });
+        await db.prepare('INSERT INTO messages (conversation_id, sender, content, type, created_at) VALUES (?, ?, ?, ?, ?)')
+          .run(conversation.id, 'agent', detectedService.custom_reply, 'text', timestamp);
+        replySent = true;
+      }
+
+      if (detectedService.portfolio_file) {
+        const fileRecord = await db.prepare('SELECT filename, original_name FROM training_files WHERE agent_id = ? AND original_name = ?').get(agent.id, detectedService.portfolio_file) as any;
+        if (fileRecord) {
+          const sent = await sendFile(sock, conversation.contact_number, fileRecord);
+          if (sent) replySent = true;
+        }
+      }
+
+      if (replySent) {
+        await db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversation.id);
+        io.emit('new_message', { 
+          conversation_id: conversation.id, 
+          sender: 'agent', 
+          content: detectedService.custom_reply || `[Sent Portfolio: ${detectedService.portfolio_file}]`, 
+          type: 'text', 
+          created_at: timestamp 
+        });
+        
+        // Consume token
+        const user = await db.prepare('SELECT id, role FROM users WHERE id = (SELECT user_id FROM whatsapp_sessions WHERE id = ?)').get(sessionId) as any;
+        if (user && user.role === 'admin') {
+          await db.prepare('UPDATE users SET tokens = MAX(0, tokens - 1) WHERE id = ?').run(user.id);
+        }
+        
+        return;
+      }
     }
 
     // Is first message hai is conversation mein?
@@ -1084,8 +1184,10 @@ YOUR IDENTITY:
 YOUR KNOWLEDGE — READ THIS FIRST, ALWAYS USE IT:
 IMPORTANT: If you find duplicate instructions, ALWAYS prioritize the most recent or detailed one.
 If a file is labeled "PORTFOLIO", it is a file you can SEND to the user. To send a portfolio file, include [SEND_FILE: filename] in your response (e.g., [SEND_FILE: My_Work.pdf]).
-Interpret the file based on its name (e.g., "Najam_Portfolio.pdf" is Najam's portfolio).
-If "RULES", follow them strictly. If "TRAINING", use it for general knowledge.
+- ALWAYS check the list of PORTFOLIO files below if a client asks for samples, work, or portfolio.
+- Match the client's request to the most relevant portfolio filename.
+- If "RULES", follow them strictly. They are your core operating policies.
+- If "TRAINING", use it for general knowledge and answering questions.
 
 ${memoryData || 'Use your identity info above.'}
 ${trainingData ? `TRAINING DOCS:\n${trainingData}` : ''}
@@ -1225,30 +1327,8 @@ BEFORE SENDING, CHECK:
 
     // Handle file sending if detected
     if (fileToSend) {
-      const filePath = path.join(process.cwd(), 'uploads', fileToSend.filename);
-      if (fs.existsSync(filePath)) {
-        const fileExt = path.extname(fileToSend.original_name).toLowerCase();
-        const isImage = ['.jpg', '.jpeg', '.png', '.webp'].includes(fileExt);
-        
-        try {
-          if (isImage) {
-            await sock.sendMessage(conversation.contact_number, { 
-              image: fs.readFileSync(filePath), 
-              caption: fileToSend.original_name 
-            });
-          } else {
-            await sock.sendMessage(conversation.contact_number, { 
-              document: fs.readFileSync(filePath), 
-              fileName: fileToSend.original_name,
-              mimetype: 'application/octet-stream'
-            });
-          }
-          console.log(`Sent file ${fileToSend.original_name} to ${conversation.contact_number}`);
-          replySent = true;
-        } catch (fileErr: any) {
-          console.error(`Failed to send file ${fileToSend.original_name}:`, fileErr.message);
-        }
-      }
+      const sent = await sendFile(sock, conversation.contact_number, fileToSend);
+      if (sent) replySent = true;
     }
 
     // 12. Consume Token (1 reply = 1 token)
@@ -1269,7 +1349,7 @@ BEFORE SENDING, CHECK:
     const msgResult = await db.prepare('INSERT INTO messages (conversation_id, sender, content, type, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(conversation.id, 'agent', aiResponse, 'text', timestamp);
     
-    await db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversation.id);
+    await db.prepare('UPDATE conversations SET last_message = ?, last_message_at = ? WHERE id = ?').run(aiResponse, timestamp, conversation.id);
 
     // Emit to UI
     io.emit('new_message', {
@@ -1324,77 +1404,91 @@ export async function deleteSession(sessionId: string) {
 }
 
 export function startFollowupScheduler(io: SocketIOServer) {
-  // Run every hour
+  // Run every 15 minutes to check for scheduled follow-ups
   setInterval(async () => {
     console.log('Running automatic follow-up check...');
     try {
-      const now = new Date();
-      // Find qualified leads that need follow-up
-      // 1st follow-up: 2 days after qualification
-      // 2nd follow-up: 3 days after 1st
-      // 3rd follow-up: 4 days after 2nd
+      const configs = await db.prepare('SELECT * FROM campaign_configs WHERE is_followup_enabled = 1').all() as any[];
       
-      const leads = await db.prepare(`
-        SELECT l.*, c.contact_number, c.session_id, c.id as conversation_id
-        FROM leads l
-        JOIN conversations c ON l.conversation_id = c.id
-        WHERE l.status = 'Qualified' 
-        AND l.auto_followup_count < 3
-      `).all() as any[];
+      for (const config of configs) {
+        const targetStatuses = JSON.parse(config.followup_statuses || '[]');
+        if (targetStatuses.length === 0) continue;
 
-      for (const lead of leads) {
-        const lastFollowup = lead.last_followup_at ? new Date(lead.last_followup_at) : new Date(lead.qualified_at);
-        const diffDays = (now.getTime() - lastFollowup.getTime()) / (1000 * 60 * 60 * 24);
-        
-        let shouldFollowup = false;
-        const nextCount = lead.auto_followup_count + 1;
-        
-        if (nextCount === 1 && diffDays >= 2) shouldFollowup = true;
-        else if (nextCount === 2 && diffDays >= 3) shouldFollowup = true;
-        else if (nextCount === 3 && diffDays >= 4) shouldFollowup = true;
+        const placeholders = targetStatuses.map(() => '?').join(',');
+        const leads = await db.prepare(`
+          SELECT l.*, c.contact_number, c.session_id, c.id as conversation_id, c.contact_name
+          FROM leads l
+          JOIN conversations c ON l.conversation_id = c.id
+          WHERE l.user_id = ? 
+          AND l.status IN (${placeholders})
+          AND (l.last_followup_at IS NULL OR datetime(l.last_followup_at, '+1 day') < datetime('now'))
+          AND l.auto_followup_count < ?
+        `).all(config.user_id, ...targetStatuses, config.max_followups || 3) as any[];
 
-        if (shouldFollowup) {
-          // Check if user replied since last message
+        if (leads.length === 0) continue;
+
+        console.log(`Found ${leads.length} leads for follow-up for user ${config.user_id}`);
+
+        // Process leads one by one with 30s delay
+        for (const lead of leads) {
+          // Check if user replied since last agent message
           const lastMessage = await db.prepare('SELECT sender FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1').get(lead.conversation_id) as any;
           
           if (lastMessage && lastMessage.sender === 'agent') {
-            // User hasn't replied, proceed with follow-up
-            const sock = sessions[lead.session_id];
-            if (sock) {
-              const history = await db.prepare('SELECT sender, content FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 10').all(lead.conversation_id) as any[];
-              const message = await generateFollowupMessage(lead.user_id, lead.name || 'there', history.reverse());
-              
-              await sock.sendMessage(lead.contact_number, { text: message });
-              
-              const timestamp = new Date().toISOString();
-              await db.prepare('INSERT INTO messages (conversation_id, sender, content, type, created_at, is_followup) VALUES (?, ?, ?, ?, ?, ?)')
-                .run(lead.conversation_id, 'agent', message, 'text', timestamp, 1);
-              
-              await db.prepare('UPDATE leads SET auto_followup_count = auto_followup_count + 1, followup_count = followup_count + 1, last_followup_at = ?, updated_at = ? WHERE id = ?')
-                .run(timestamp, timestamp, lead.id);
-              
-              await db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(timestamp, lead.conversation_id);
+            const sessionId = lead.session_id.toString();
+            const sock = sessions[sessionId];
 
-              await db.prepare('INSERT INTO activities (user_id, type, description) VALUES (?, ?, ?)')
-                .run(lead.user_id, 'followup_sent', `Automated follow-up #${nextCount} sent to ${lead.name || lead.contact_number}.`);
+            if (sock && sock.user) {
+              try {
+                // Generate unique AI message
+                const history = await db.prepare('SELECT sender, content FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 20').all(lead.conversation_id) as any[];
+                const aiMessage = await generateFollowupMessage(config.user_id, lead.name || lead.contact_name || 'there', history);
 
-              io.emit('new_message', {
-                conversation_id: lead.conversation_id,
-                sender: 'agent',
-                content: message,
-                type: 'text',
-                created_at: timestamp
-              });
-              
-              console.log(`Sent auto follow-up ${nextCount} to ${lead.contact_number}`);
+                // Send message
+                const jid = lead.contact_number.includes('@') ? lead.contact_number : `${lead.contact_number}@s.whatsapp.net`;
+                await sock.sendMessage(jid, { text: aiMessage });
+
+                // Log follow-up
+                const timestamp = new Date().toISOString();
+                await db.prepare('INSERT INTO messages (conversation_id, sender, content, type, created_at, is_followup) VALUES (?, ?, ?, ?, ?, ?)')
+                  .run(lead.conversation_id, 'agent', aiMessage, 'text', timestamp, 1);
+                
+                await db.prepare('UPDATE conversations SET last_message = ?, last_message_at = ? WHERE id = ?').run(aiMessage, timestamp, lead.conversation_id);
+                
+                await db.prepare('UPDATE leads SET followup_count = followup_count + 1, auto_followup_count = auto_followup_count + 1, last_followup_at = ? WHERE id = ?')
+                  .run(timestamp, lead.id);
+
+                await db.prepare('INSERT INTO followup_logs (user_id, lead_id, status, message, sent_at) VALUES (?, ?, ?, ?, ?)')
+                  .run(config.user_id, lead.id, 'sent', aiMessage, timestamp);
+
+                await db.prepare('INSERT INTO activities (user_id, type, description) VALUES (?, ?, ?)')
+                  .run(config.user_id, 'followup_sent', `Follow-up sent to ${lead.name || lead.contact_number}`);
+
+                io.emit('new_message', {
+                  conversation_id: lead.conversation_id,
+                  sender: 'agent',
+                  content: aiMessage,
+                  type: 'text',
+                  created_at: timestamp
+                });
+
+                console.log(`Follow-up sent to ${lead.contact_number}`);
+
+                // Wait 30 seconds before next lead
+                await new Promise(resolve => setTimeout(resolve, 30000));
+              } catch (err: any) {
+                console.error(`Failed to send follow-up to ${lead.contact_number}:`, err.message);
+                await db.prepare('INSERT INTO followup_logs (user_id, lead_id, status, message) VALUES (?, ?, ?, ?)')
+                  .run(config.user_id, lead.id, 'failed', err.message);
+              }
             }
           }
         }
       }
-    } catch (error) {
-      console.error('Follow-up scheduler error:', error);
+    } catch (error: any) {
+      console.error('Follow-up scheduler error:', error.message);
     }
-  }, 1000 * 60 * 60); // Every hour
+  }, 15 * 60 * 1000); // 15 minutes
 }
 
 export async function syncWhatsAppHistory(sessionId: string, io: SocketIOServer) {

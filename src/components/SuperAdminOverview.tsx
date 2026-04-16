@@ -33,7 +33,7 @@ import {
   Cell
 } from 'recharts';
 
-export default function SuperAdminOverview() {
+export default function SuperAdminOverview({ token }: { token?: string | null }) {
   const [stats, setStats] = useState<any>(null);
   const [activities, setActivities] = useState<any[]>([]);
   const [isClearingCache, setIsClearingCache] = useState(false);
@@ -50,6 +50,7 @@ export default function SuperAdminOverview() {
   }, [showDetailedAnalytics]);
 
   const fetchData = async () => {
+    if (!token) return;
     try {
       const [statsData, activitiesData, chartDataRes] = await Promise.all([
         apiFetch('/api/super-admin/stats'),
@@ -120,7 +121,7 @@ export default function SuperAdminOverview() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
         {kpiCards.map((card, i) => (
           <motion.div
-            key={i}
+            key={`kpi-card-${i}`}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: i * 0.1 }}
@@ -306,7 +307,7 @@ export default function SuperAdminOverview() {
             <AnimatePresence initial={false}>
               {activities.map((log, i) => (
                 <motion.div
-                  key={`${log.id}-${i}`}
+                  key={`activity-log-${log.id || i}`}
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
                   className="flex gap-4 group"
@@ -474,7 +475,7 @@ export default function SuperAdminOverview() {
                     { label: 'System Status', value: 'Healthy', status: 'Healthy' },
                     { label: 'AI Engine', value: 'Ready', status: 'Processing' },
                   ].map((item, i) => (
-                    <div key={i} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                    <div key={`infrastructure-health-${i}`} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
                       <div>
                         <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{item.label}</p>
                         <p className="text-sm font-black text-gray-900">{item.value}</p>

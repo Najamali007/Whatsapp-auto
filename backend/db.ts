@@ -485,12 +485,13 @@ async function initDb() {
       table.text('content');
       table.timestamp('created_at').defaultTo(dbProxy.fn.now());
     });
-    const hasCategory = await dbProxy.schema.hasColumn('training_files', 'category');
-    if (!hasCategory) {
-      await dbProxy.schema.table('training_files', (table) => {
-        table.string('category').defaultTo('training');
-      });
-    }
+  }
+
+  const hasCategory = await dbProxy.schema.hasColumn('training_files', 'category');
+  if (!hasCategory) {
+    await dbProxy.schema.table('training_files', (table) => {
+      table.string('category').defaultTo('training');
+    });
   }
 
   const hasSettings = await dbProxy.schema.hasTable('settings');
@@ -564,8 +565,31 @@ async function initDb() {
       table.integer('enable_ai_rewriting').defaultTo(1);
       table.string('ai_tone').defaultTo('Professional');
       table.integer('user_consent_required').defaultTo(1);
+      table.integer('is_followup_enabled').defaultTo(0);
+      table.text('followup_statuses'); // JSON array of statuses
       table.text('automation_rules'); // JSON string for stage rules
       table.timestamp('updated_at').defaultTo(dbProxy.fn.now());
+    });
+  } else {
+    const hasFollowupEnabled = await dbProxy.schema.hasColumn('campaign_configs', 'is_followup_enabled');
+    if (!hasFollowupEnabled) {
+      await dbProxy.schema.table('campaign_configs', (table) => {
+        table.integer('is_followup_enabled').defaultTo(0);
+        table.text('followup_statuses');
+      });
+    }
+  }
+
+  const hasFollowupLogs = await dbProxy.schema.hasTable('followup_logs');
+  if (!hasFollowupLogs) {
+    await dbProxy.schema.createTable('followup_logs', (table) => {
+      table.increments('id').primary();
+      table.integer('user_id').unsigned().references('id').inTable('users').onDelete('CASCADE');
+      table.integer('lead_id').unsigned().references('id').inTable('leads').onDelete('CASCADE');
+      table.string('status').defaultTo('pending'); // pending, sent, failed
+      table.text('message');
+      table.timestamp('sent_at');
+      table.timestamp('created_at').defaultTo(dbProxy.fn.now());
     });
   }
 

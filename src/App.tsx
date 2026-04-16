@@ -105,7 +105,7 @@ export default function App() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return userRole === 'super_admin' ? <SuperAdminOverview /> : <Dashboard token={token} />;
+        return userRole === 'super_admin' ? <SuperAdminOverview token={token} /> : <Dashboard token={token} />;
       case 'agents':
         return <Agents token={token} initialAgentId={selectedAgentId} onNavigate={setActiveTab} />;
       case 'leads':
@@ -126,7 +126,7 @@ export default function App() {
       case 'settings':
         return <Settings />;
       case 'admins':
-        return <SuperAdminDashboard />;
+        return <SuperAdminDashboard token={token} />;
       default:
         return <Dashboard token={token} />;
     }
@@ -165,6 +165,7 @@ export default function App() {
               }} 
               onLogout={handleLogout}
               userRole={userRole}
+              token={token}
             >
               <AnimatePresence mode="wait">
                 <motion.div

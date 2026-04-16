@@ -14,7 +14,7 @@ import { createRequire } from 'module';
 import db, { initDb, isMySQL } from './backend/db.js';
 
 const require = createRequire(import.meta.url);
-const pdf = require('pdf-parse');
+const pdf = require('pdf-parse-fork');
 const mammoth = require('mammoth');
 import { 
   callAI, 
@@ -418,13 +418,30 @@ app.delete('/api/agents/:id/memory/:memoryId', authenticateToken, async (req: an
   }
 });
 
+app.put('/api/agents/:id/memory/:memoryId', authenticateToken, async (req: any, res) => {
+  try {
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ error: 'Content is required' });
+
+    const agent = await db.prepare('SELECT id FROM agents WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    await db.prepare('UPDATE agent_memory SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND agent_id = ?')
+      .run(content, req.params.memoryId, req.params.id);
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Train with chat — new endpoint with memory
 app.post('/api/agents/:id/train-chat', authenticateToken, async (req: any, res) => {
   try {
     const agent = await db.prepare('SELECT id FROM agents WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-    const { message } = req.body;
+    const { message, category } = req.body;
     if (!message?.trim()) return res.status(400).json({ error: 'Message required' });
 
     // Save user message to training chat history
@@ -436,7 +453,7 @@ app.post('/api/agents/:id/train-chat', authenticateToken, async (req: any, res) 
       'SELECT role, content FROM agent_training_chats WHERE agent_id = ? ORDER BY created_at DESC LIMIT 20'
     ).all(req.params.id) as any[];
 
-    const response = await trainAgentWithChat(req.user.id, parseInt(req.params.id), message, chatHistory.reverse());
+    const response = await trainAgentWithChat(req.user.id, parseInt(req.params.id), message, chatHistory.reverse(), category || 'training');
 
     // Save agent response to history
     await db.prepare('INSERT INTO agent_training_chats (agent_id, role, content) VALUES (?, ?, ?)')
@@ -642,13 +659,29 @@ app.post('/api/messages/:id/transcription', authenticateToken, async (req, res) 
   res.json({ success: true });
 });
 
+app.post('/api/transcribe', authenticateToken, async (req: any, res) => {
+  const { audio, mimeType } = req.body;
+  try {
+    const transcription = await callAI(req.user.id, "Transcribe this audio message. Return only the transcription text. If it's empty or noise, return an empty string.", "", {
+      inlineData: {
+        mimeType: mimeType || "audio/ogg",
+        data: audio
+      }
+    });
+    res.json({ text: transcription });
+  } catch (error: any) {
+    console.error('Manual transcription failed:', error.message);
+    res.status(500).json({ error: 'Transcription failed' });
+  }
+});
+
 // Serve uploads statically
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // --- Agent Training Routes ---
 app.get('/api/agents/:id/training-files', authenticateToken, async (req: any, res) => {
   const files = await db.prepare(`
-    SELECT tf.id, tf.original_name, tf.created_at 
+    SELECT tf.id, tf.original_name, tf.category, tf.created_at 
     FROM training_files tf
     JOIN agents a ON tf.agent_id = a.id
     WHERE tf.agent_id = ? AND a.user_id = ?
@@ -682,10 +715,8 @@ app.post('/api/agents/:id/train-file', authenticateToken, upload.single('file'),
     await db.prepare('INSERT INTO training_files (agent_id, filename, original_name, category, content) VALUES (?, ?, ?, ?, ?)')
       .run(req.params.id, req.file.filename, req.file.originalname, category, content);
 
-    // Also extract memories from the document (Skip for portfolio as per user request)
-    if (category !== 'portfolio') {
-      await trainAgentWithDocument(req.user.id, parseInt(req.params.id), content, req.file.originalname, category);
-    }
+    // Also extract memories from the document
+    await trainAgentWithDocument(req.user.id, parseInt(req.params.id), content, req.file.originalname, category);
 
     res.json({ success: true });
   } catch (error) {
@@ -1695,7 +1726,7 @@ app.post('/api/conversations/:id/messages', authenticateToken, upload.single('fi
     const msgResult = await db.prepare('INSERT INTO messages (conversation_id, sender, content, type, created_at, is_followup) VALUES (?, ?, ?, ?, ?, ?)')
       .run(conversationId, 'agent', content || (file ? file.originalname : ''), type || 'text', timestamp, 0);
 
-    await db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversationId);
+    await db.prepare('UPDATE conversations SET last_message = ?, last_message_at = ? WHERE id = ?').run(content || (file ? file.originalname : ''), timestamp, conversationId);
 
     const newMessage = {
       id: msgResult.lastInsertRowid,
@@ -2006,6 +2037,48 @@ app.post('/api/whatsapp/send', authenticateToken, upload.single('file'), async (
   } catch (error) {
     console.error('Failed to send message:', error);
     res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
+// --- Follow-up System Routes ---
+app.get('/api/leads/followup/settings', authenticateToken, async (req: any, res) => {
+  try {
+    let config = await db.prepare('SELECT * FROM campaign_configs WHERE user_id = ?').get(req.user.id) as any;
+    if (!config) {
+      await db.prepare('INSERT INTO campaign_configs (user_id) VALUES (?)').run(req.user.id);
+      config = await db.prepare('SELECT * FROM campaign_configs WHERE user_id = ?').get(req.user.id);
+    }
+    res.json(config);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch follow-up settings' });
+  }
+});
+
+app.post('/api/leads/followup/settings', authenticateToken, async (req: any, res) => {
+  const { is_followup_enabled, followup_statuses } = req.body;
+  try {
+    await db.prepare('UPDATE campaign_configs SET is_followup_enabled = ?, followup_statuses = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?')
+      .run(is_followup_enabled ? 1 : 0, JSON.stringify(followup_statuses), req.user.id);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update follow-up settings' });
+  }
+});
+
+app.get('/api/leads/followup/logs', authenticateToken, async (req: any, res) => {
+  try {
+    const logs = await db.prepare(`
+      SELECT fl.*, l.name as lead_name, l.status as lead_status, c.contact_number
+      FROM followup_logs fl
+      JOIN leads l ON fl.lead_id = l.id
+      JOIN conversations c ON l.conversation_id = c.id
+      WHERE fl.user_id = ?
+      ORDER BY fl.created_at DESC
+      LIMIT 100
+    `).all(req.user.id);
+    res.json(logs);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch follow-up logs' });
   }
 });
 

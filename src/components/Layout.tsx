@@ -43,9 +43,10 @@ interface LayoutProps {
   onTabChange: (tab: string) => void;
   onLogout: () => void;
   userRole?: string | null;
+  token?: string | null;
 }
 
-export default function Layout({ children, activeTab, onTabChange, onLogout, userRole: propUserRole }: LayoutProps) {
+export default function Layout({ children, activeTab, onTabChange, onLogout, userRole: propUserRole, token }: LayoutProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [showTokenTopup, setShowTokenTopup] = useState(false);
@@ -108,8 +109,9 @@ export default function Layout({ children, activeTab, onTabChange, onLogout, use
 
   useEffect(() => {
     const fetchStats = async () => {
+      if (!token) return;
       try {
-        const userRole = localStorage.getItem('user_role');
+        const userRole = propUserRole || localStorage.getItem('user_role');
         
         if (userRole === 'super_admin') {
           const admins = await apiFetch('/api/super-admin/admins');

@@ -49,6 +49,8 @@ interface Conversation {
   id: number;
   session_id: number;
   contact_number: string;
+  profile_pic?: string;
+  last_message?: string;
   last_message_at: string;
   session_number: string;
   agent_name: string;
@@ -1308,12 +1310,21 @@ export default function Conversations({ token, initialConversationId, onConversa
                     </div>
                     <div className="relative shrink-0">
                       <div className="w-12 h-12 bg-gray-100 rounded-2xl overflow-hidden">
-                        <img 
-                          src={`https://ui-avatars.com/api/?name=${conv.contact_name || 'Unknown'}&background=random`} 
-                          alt="" 
-                          className="w-full h-full object-cover"
-                          referrerPolicy="no-referrer"
-                        />
+                        {conv.profile_pic ? (
+                          <img 
+                            src={conv.profile_pic} 
+                            alt="" 
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <img 
+                            src={`https://ui-avatars.com/api/?name=${conv.contact_name || 'Unknown'}&background=random`} 
+                            alt="" 
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        )}
                       </div>
                       <div className={`absolute -bottom-1 -right-1 w-4 h-4 border-2 border-white rounded-full flex items-center justify-center ${
                         conv.audit_status === 'audited' ? 'bg-blue-500' : 
@@ -1353,11 +1364,11 @@ export default function Conversations({ token, initialConversationId, onConversa
                         </span>
                       </div>
                       <div className="flex justify-between items-center">
-                        <p className="text-xs text-gray-500 truncate">
+                        <p className="text-xs text-gray-500 truncate max-w-[180px]">
                           {conv.unread_count > 0 ? (
                             <span className="text-gray-900 font-medium">New message...</span>
                           ) : (
-                            conv.last_message_content || 'No messages yet'
+                            conv.last_message || conv.last_message_content || 'No messages yet'
                           )}
                         </p>
                         {conv.unread_count > 0 && (

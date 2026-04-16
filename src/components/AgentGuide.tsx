@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Bot, Loader2, Trash2, Zap, Globe, MessageSquare, Brain, X, RefreshCw, Upload, Check, FileText } from 'lucide-react';
+import { Send, Bot, Loader2, Trash2, Zap, Globe, MessageSquare, Brain, X, RefreshCw, Upload, Check, FileText, Pencil, Save } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch } from '../lib/api';
 
@@ -39,11 +39,27 @@ export default function AgentGuide({ agentId, token, category = 'training' }: Ag
     setUploadCategory(category);
   }, [category]);
 
+  const [showRuleNotice, setShowRuleNotice] = useState(false);
+  const [editingMemoryId, setEditingMemoryId] = useState<number | null>(null);
+  const [editContent, setEditContent] = useState('');
+
   const fetchMemories = async () => {
     try {
       const data = await apiFetch(`/api/agents/${agentId}/memory`);
       // Filter memories by category if provided
-      const filteredData = data.filter((m: any) => m.topic === category || !m.topic);
+      const filteredData = data.filter((m: any) => {
+        if (category === 'training') return !m.topic.startsWith('rule_') && !m.topic.startsWith('portfolio_');
+        if (category === 'rules') return m.topic.startsWith('rule_');
+        if (category === 'portfolio') return m.topic.startsWith('portfolio_');
+        return true;
+      });
+      
+      // If new memories were added (compared to previous count), show notice
+      if (memories.length > 0 && filteredData.length > memories.length) {
+        setShowRuleNotice(true);
+        setTimeout(() => setShowRuleNotice(false), 5000);
+      }
+      
       setMemories(filteredData);
     } catch (err) {
       console.error('Failed to fetch memories');
@@ -113,6 +129,7 @@ export default function AgentGuide({ agentId, token, category = 'training' }: Ag
   };
 
   const handleDeleteMemory = async (memoryId: number) => {
+    if (!confirm('Delete this memory?')) return;
     try {
       await apiFetch(`/api/agents/${agentId}/memory/${memoryId}`, { method: 'DELETE' });
       setMemories(prev => prev.filter(m => m.id !== memoryId));
@@ -121,13 +138,39 @@ export default function AgentGuide({ agentId, token, category = 'training' }: Ag
     }
   };
 
-  const handleClearHistory = async () => {
-    if (!confirm('Clear training chat history? Memories will be kept.')) return;
+  const handleUpdateMemory = async (memoryId: number) => {
     try {
+      await apiFetch(`/api/agents/${agentId}/memory/${memoryId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ content: editContent })
+      });
+      setMemories(prev => prev.map(m => m.id === memoryId ? { ...m, content: editContent } : m));
+      setEditingMemoryId(null);
+    } catch (err) {
+      console.error('Failed to update memory');
+    }
+  };
+
+  const handleClearHistory = async () => {
+    if (!confirm('Download and Clear training chat history? Memories will be kept.')) return;
+    try {
+      // 1. Download history
+      const historyText = messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+      const blob = new Blob([historyText], { type: 'text/plain' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `agent_${agentId}_training_history_${new Date().toISOString().split('T')[0]}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      // 2. Clear from DB
       await apiFetch(`/api/agents/${agentId}/train-chat-history`, { method: 'DELETE' });
       setMessages([{
         role: 'agent',
-        content: "Chat history cleared! I still remember everything I learned. Start a new training session!"
+        content: "Chat history downloaded and cleared! I still remember everything I learned. Start a new training session!"
       }]);
     } catch (err) {
       console.error('Failed to clear history');
@@ -172,7 +215,10 @@ export default function AgentGuide({ agentId, token, category = 'training' }: Ag
             </div>
             <div>
               <h3 className="text-sm font-black uppercase tracking-widest text-gray-900">Train with Chat</h3>
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Everything you say is remembered</p>
+              <div className="flex items-center gap-2">
+                <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Internal Memory Active • No Tokens Required</p>
+              </div>
             </div>
           </div>
           <button onClick={handleClearHistory}
@@ -183,7 +229,23 @@ export default function AgentGuide({ agentId, token, category = 'training' }: Ag
         </div>
 
         {/* Messages */}
-        <div ref={scrollRef} className="h-[400px] overflow-y-auto p-6 space-y-4 custom-scrollbar">
+        <div ref={scrollRef} className="h-[400px] overflow-y-auto p-6 space-y-4 custom-scrollbar relative">
+          <AnimatePresence>
+            {showRuleNotice && (
+              <motion.div 
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-emerald-500 text-white px-6 py-3 rounded-2xl shadow-xl flex items-center gap-3 border border-emerald-400"
+              >
+                <div className="w-6 h-6 bg-white/20 rounded-lg flex items-center justify-center">
+                  <Check className="w-4 h-4" />
+                </div>
+                <span className="text-xs font-black uppercase tracking-widest">New {category === 'rules' ? 'Rule' : 'Knowledge'} Added!</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {messages.map((msg, i) => (
             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[85%] p-4 rounded-2xl text-sm leading-relaxed ${
@@ -199,7 +261,7 @@ export default function AgentGuide({ agentId, token, category = 'training' }: Ag
             <div className="flex justify-start">
               <div className="bg-gray-50 p-4 rounded-2xl rounded-tl-none border border-gray-100 flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Processing & Storing...</span>
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Learning Locally...</span>
               </div>
             </div>
           )}
@@ -266,12 +328,34 @@ export default function AgentGuide({ agentId, token, category = 'training' }: Ag
                       <span className={`w-1.5 h-1.5 rounded-full ${memory.source === 'document' ? 'bg-purple-500' : 'bg-primary'}`} />
                       <span className="text-[9px] font-black uppercase tracking-widest text-gray-400">{memory.topic}</span>
                     </div>
-                    <button onClick={() => handleDeleteMemory(memory.id)}
-                      className="p-0.5 text-gray-200 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all">
-                      <X className="w-3 h-3" />
-                    </button>
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                      {editingMemoryId === memory.id ? (
+                        <button onClick={() => handleUpdateMemory(memory.id)}
+                          className="p-0.5 text-emerald-500 hover:bg-emerald-50 rounded">
+                          <Save className="w-3 h-3" />
+                        </button>
+                      ) : (
+                        <button onClick={() => { setEditingMemoryId(memory.id); setEditContent(memory.content); }}
+                          className="p-0.5 text-gray-400 hover:text-primary hover:bg-primary/5 rounded">
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                      )}
+                      <button onClick={() => handleDeleteMemory(memory.id)}
+                        className="p-0.5 text-gray-200 hover:text-red-500 rounded">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
-                  <p className="text-[11px] font-bold text-gray-700 leading-snug">{memory.content}</p>
+                  {editingMemoryId === memory.id ? (
+                    <textarea
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      className="w-full bg-white border border-primary/20 rounded-lg p-2 text-[11px] font-bold focus:ring-2 focus:ring-primary/10 outline-none min-h-[60px]"
+                      autoFocus
+                    />
+                  ) : (
+                    <p className="text-[11px] font-bold text-gray-700 leading-snug">{memory.content}</p>
+                  )}
                   <span className={`mt-1.5 inline-block text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md ${
                     memory.source === 'document' ? 'bg-purple-50 text-purple-400' : 'bg-primary/5 text-primary'
                   }`}>{memory.source}</span>
