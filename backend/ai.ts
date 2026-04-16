@@ -546,31 +546,42 @@ export async function trainAgentWithChat(
   const lowerMsg = userMessage.toLowerCase().trim();
   
   // Heuristic for direct instruction (Smart local learning without API)
+  const trainingPrefixes = [
+    'always', 'never', 'rule:', 'remember', 'portfolio:', 'service:', 
+    'personality:', 'tone:', 'objective:', 'about:', 'company:', 'product:', 
+    'instruction:', 'note:', 'info:'
+  ];
+
   const isInstruction = 
-    lowerMsg.startsWith('always') || 
-    lowerMsg.startsWith('never') || 
-    lowerMsg.startsWith('rule:') || 
-    lowerMsg.startsWith('remember') || 
-    lowerMsg.startsWith('portfolio:') ||
-    lowerMsg.startsWith('service:') ||
-    (lowerMsg.length < 200 && !lowerMsg.includes('?') && !lowerMsg.startsWith('what') && !lowerMsg.startsWith('how') && !lowerMsg.startsWith('why'));
+    trainingPrefixes.some(p => lowerMsg.startsWith(p)) ||
+    (lowerMsg.length < 200 && !lowerMsg.includes('?') && !lowerMsg.split('\n')[0].includes('what') && !lowerMsg.split('\n')[0].includes('how') && !lowerMsg.split('\n')[0].includes('why'));
 
   if (isInstruction) {
     console.log(`[LOCAL TRAINING] Direct instruction detected: "${userMessage}"`);
-    const words = userMessage.split(' ');
+    
+    // Determine topic based on prefix or first few words
+    let topic = 'instruction';
+    const firstWord = lowerMsg.split(/[:\s]/)[0];
+    if (trainingPrefixes.some(p => p.startsWith(firstWord) || p.includes(firstWord))) {
+      topic = firstWord.replace(':', '');
+    } else {
+      const words = userMessage.split(' ');
+      topic = words.slice(0, 2).join('_').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() || 'instruction';
+    }
+
     const prefix = category === 'rules' ? 'rule_' : (category === 'portfolio' ? 'portfolio_' : '');
-    const topic = prefix + words.slice(0, 3).join('_').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() || 'instruction';
+    const finalTopic = prefix + topic;
     
     const existing = await db.prepare(
       'SELECT id FROM agent_memory WHERE agent_id = ? AND topic = ?'
-    ).get(agentId, topic) as any;
+    ).get(agentId, finalTopic) as any;
 
     if (existing) {
       await db.prepare('UPDATE agent_memory SET content = ?, source = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
         .run(userMessage, 'chat', existing.id);
     } else {
       await db.prepare('INSERT INTO agent_memory (agent_id, topic, content, source) VALUES (?, ?, ?, ?)')
-        .run(agentId, topic, userMessage, 'chat');
+        .run(agentId, finalTopic, userMessage, 'chat');
     }
 
     const acknowledgments = [
