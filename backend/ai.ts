@@ -20,7 +20,7 @@ export async function getActiveApiKeys(_userId: number) {
 }
 
 const DEFAULT_KEYS = {
-  deepseek: 'sk-d612c504e913431ca23ae732e33b6ef4'
+  deepseek: '' // Removed invalid hardcoded key
 };
 
 export async function validateGeminiKey(apiKey: string) {
@@ -554,7 +554,16 @@ export async function trainAgentWithChat(
 
   const isInstruction = 
     trainingPrefixes.some(p => lowerMsg.startsWith(p)) ||
-    (lowerMsg.length < 200 && !lowerMsg.includes('?') && !lowerMsg.split('\n')[0].includes('what') && !lowerMsg.split('\n')[0].includes('how') && !lowerMsg.split('\n')[0].includes('why'));
+    (lowerMsg.length < 150 && 
+     !lowerMsg.includes('?') && 
+     !lowerMsg.split('\n')[0].includes('what') && 
+     !lowerMsg.split('\n')[0].includes('how') && 
+     !lowerMsg.split('\n')[0].includes('why') &&
+     !lowerMsg.split('\n')[0].includes('who') &&
+     !lowerMsg.split('\n')[0].includes('which') &&
+     !lowerMsg.split('\n')[0].includes('can you') &&
+     !lowerMsg.split('\n')[0].includes('are you')
+    );
 
   if (isInstruction) {
     console.log(`[LOCAL TRAINING] Direct instruction detected: "${userMessage}"`);
@@ -629,9 +638,25 @@ RULES FOR THIS TRAINING SESSION:
 - NEVER make up info not in your memory
 - If info contradicts old memory — confirm the UPDATE: "Updated! I'll now use [new info] instead of [old info]"`;
 
-  const response = await callAI(userId, userMessage, systemPrompt, null, true); // systemOnly = true
-  await extractAndStoreMemory(userId, agentId, userMessage, response, category);
-  return response;
+  try {
+    const response = await callAI(userId, userMessage, systemPrompt, null, true); // systemOnly = true
+    await extractAndStoreMemory(userId, agentId, userMessage, response, category);
+    return response;
+  } catch (error: any) {
+    console.error('Training chat AI call failed, using fallback:', error.message);
+    // Fallback: If AI fails, still try to store memory using a simpler method or just directly
+    const fallbackResponse = "I've noted that down in my local memory. (Note: AI service is currently unavailable, but your instruction was saved locally).";
+    
+    // Attempt local storage without AI extraction
+    try {
+      await db.prepare('INSERT INTO agent_memory (agent_id, topic, content, source) VALUES (?, ?, ?, ?)')
+        .run(agentId, `manual_${Date.now()}`, userMessage, 'chat');
+    } catch (e) {
+      console.error('Local memory storage failed:', e);
+    }
+    
+    return fallbackResponse;
+  }
 }
 
 async function extractAndStoreMemory(
@@ -668,7 +693,7 @@ Respond ONLY in JSON:
 }`;
 
   try {
-    const result = await callAI(userId, extractPrompt, '');
+    const result = await callAI(userId, extractPrompt, '', null, true); // systemOnly = true
     const jsonMatch = result.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return;
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Save, Key, Trash2, AlertCircle, CheckCircle2, Loader2, RefreshCw, Coins, X, Globe, Plus, ExternalLink, LayoutDashboard, Users, Zap, Target, Layers } from 'lucide-react';
+import { Save, Key, Trash2, AlertCircle, CheckCircle2, Loader2, RefreshCw, Coins, X, Globe, Plus, ExternalLink, LayoutDashboard, Users, Zap, Target, Layers, Download } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 
 interface ApiSetting {
@@ -265,6 +265,26 @@ export default function Settings() {
     setConfirmModal({ type: 'agent', id: agent.id, name: agent.name });
   };
 
+  const handleExportAgent = async (id: number) => {
+    try {
+      const data = await apiFetch(`/api/agents/${id}/export`);
+      
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `agent_${data.agent?.name || id}_export.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      setMessage({ type: 'success', text: `Agent ${data.agent?.name || id} exported successfully!` });
+    } catch (error: any) {
+      setMessage({ type: 'error', text: 'Failed to export agent data' });
+    }
+  };
+
   const executeResetAgent = async () => {
     if (!confirmModal) return;
     const agentId = confirmModal.id;
@@ -483,6 +503,13 @@ export default function Settings() {
                           </div>
                           <div className="flex items-center gap-2">
                             <button
+                              onClick={() => handleExportAgent(linkedAgent.id)}
+                              className="p-1.5 text-gray-400 hover:text-primary transition-all rounded-lg hover:bg-primary/5"
+                              title="Download Agent Data"
+                            >
+                              <Download className="w-4 h-4" />
+                            </button>
+                            <button
                               onClick={() => handleResetAgentTraining(linkedAgent)}
                               disabled={resettingItem === `agent-${linkedAgent.id}`}
                               className="px-3 py-1.5 bg-blue-500/10 text-blue-600 hover:bg-blue-500/20 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50 flex items-center gap-1.5"
@@ -509,6 +536,13 @@ export default function Settings() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleExportAgent(agent.id)}
+                      className="p-1.5 text-gray-400 hover:text-primary transition-all rounded-lg hover:bg-primary/5"
+                      title="Download Agent Data"
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
                     <button
                       onClick={() => handleResetAgentTraining(agent)}
                       disabled={resettingItem === `agent-${agent.id}`}

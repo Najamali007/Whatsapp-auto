@@ -648,6 +648,18 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
   return null;
 }
 
+async function checkAndDeductToken(userId: number, io?: SocketIOServer) {
+  const user = await db.prepare('SELECT role, tokens FROM users WHERE id = ?').get(userId) as any;
+  if (user && user.role === 'admin') {
+    if (user.tokens <= 0) {
+      if (io) io.emit('token_limit_reached', { userId });
+      return false;
+    }
+    await db.prepare('UPDATE users SET tokens = MAX(0, tokens - 1) WHERE id = ?').run(userId);
+  }
+  return true;
+}
+
 async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: proto.IWebMessageInfo, io: SocketIOServer) {
   const from = msg.key.remoteJid;
   if (!from || !isValidJid(from)) return;
@@ -660,7 +672,8 @@ async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: pro
 
   // --- Rule-based Logic ---
   try {
-    const session = await db.prepare('SELECT agent_id FROM whatsapp_sessions WHERE id = ?').get(sessionId) as any;
+    const session = await db.prepare('SELECT user_id, agent_id FROM whatsapp_sessions WHERE id = ?').get(sessionId) as any;
+    const userId = session?.user_id;
     if (session && session.agent_id) {
       const rules = await db.prepare('SELECT * FROM agent_rules WHERE agent_id = ? AND is_active = 1').all(session.agent_id) as any[];
       
@@ -679,6 +692,12 @@ async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: pro
 
         if (triggered) {
           console.log(`Rule triggered: ${rule.description}`);
+          
+          if (userId && !(await checkAndDeductToken(userId, io))) {
+            console.log(`Token exhausted for rule action. Skipping.`);
+            continue;
+          }
+
           if (rule.action_type === 'forward_to_group') {
             const targetJid = rule.action_value;
             await sock.sendMessage(targetJid, { text: `[Forwarded by Agent]\nFrom: ${from}\n\n${savedMsg.text}` });
@@ -773,6 +792,8 @@ async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: pro
           if (shouldTrigger) {
             const template = rule.template.replace('{Name}', conversation.contact_name || 'there');
             
+            if (userId && !(await checkAndDeductToken(userId, io))) return;
+
             // Check if this exact template was sent recently to this conversation
             const lastAgentMsg = await db.prepare("SELECT content FROM messages WHERE conversation_id = ? AND sender = 'agent' ORDER BY created_at DESC LIMIT 1").get(savedMsg.conversationId) as any;
             
@@ -780,6 +801,8 @@ async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: pro
               console.log(`Automation rule duplicate detected for stage: ${lead.status}. Skipping.`);
               ruleTriggered = true; // Still mark as triggered to prevent AI from also replying
             } else {
+              if (userId && !(await checkAndDeductToken(userId, io))) return;
+
               await sock.sendMessage(from, { text: template });
               
               const timestamp = new Date().toISOString();
@@ -943,19 +966,13 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     if (!session || !session.user_id) return;
 
     // Token Check
-    const user = await db.prepare('SELECT role, tokens, token_limit FROM users WHERE id = ?').get(session.user_id) as any;
-    if (user && user.role === 'admin') {
-      if (user.tokens <= 0) {
+    const userRole = await db.prepare('SELECT role FROM users WHERE id = ?').get(session.user_id) as any;
+    if (userRole?.role === 'admin') {
+      const tokens = await db.prepare('SELECT tokens FROM users WHERE id = ?').get(session.user_id) as any;
+      if (!tokens || tokens.tokens <= 0) {
         console.log(`Admin ${session.user_id} has no tokens left. Stopping agent.`);
         await db.prepare('UPDATE conversations SET is_autopilot = 0 WHERE id = ?').run(conversation.id);
         io.emit('token_limit_reached', { userId: session.user_id });
-        io.emit('new_message', {
-          conversation_id: conversation.id,
-          sender: 'system',
-          content: 'Agent stopped: No tokens remaining. Please contact WhatsApp Auto Team for top-up.',
-          type: 'system',
-          created_at: new Date().toISOString()
-        });
         return;
       }
     }
@@ -1206,11 +1223,7 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
           created_at: timestamp 
         });
         
-        // Consume token
-        const user = await db.prepare('SELECT id, role FROM users WHERE id = (SELECT user_id FROM whatsapp_sessions WHERE id = ?)').get(sessionId) as any;
-        if (user && user.role === 'admin') {
-          await db.prepare('UPDATE users SET tokens = MAX(0, tokens - 1) WHERE id = ?').run(user.id);
-        }
+        if (session.user_id && !(await checkAndDeductToken(session.user_id, io))) return;
         
         return;
       }
@@ -1372,20 +1385,16 @@ BEFORE SENDING, CHECK:
     // Send message via WhatsApp
     let replySent = false;
     if (aiResponse) {
+      if (session.user_id && !(await checkAndDeductToken(session.user_id, io))) return;
       await sock.sendMessage(conversation.contact_number, { text: aiResponse });
       replySent = true;
     }
 
     // Handle file sending if detected
     if (fileToSend) {
+      if (session.user_id && !(await checkAndDeductToken(session.user_id, io))) return;
       const sent = await sendFile(sock, conversation.contact_number, fileToSend);
       if (sent) replySent = true;
-    }
-
-    // 12. Consume Token (1 reply = 1 token)
-    if (replySent && user && user.role === 'admin') {
-      await db.prepare('UPDATE users SET tokens = MAX(0, tokens - 1) WHERE id = ?').run(session.user_id);
-      console.log(`Token consumed for agent reply to ${conversation.contact_number}. User: ${session.user_id}`);
     }
 
     // Update Timestamps

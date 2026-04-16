@@ -14,7 +14,8 @@ import { createRequire } from 'module';
 import db, { initDb, isMySQL } from './backend/db.js';
 
 const require = createRequire(import.meta.url);
-const pdf = require('pdf-parse-fork');
+const pdfModule = require('pdf-parse-fork');
+const pdf = typeof pdfModule === 'function' ? pdfModule : (pdfModule.default || pdfModule);
 const mammoth = require('mammoth');
 import { 
   callAI, 
@@ -1308,6 +1309,7 @@ app.get('/api/dashboard/stats', authenticateToken, async (req: any, res) => {
       totalCustomers: customers?.count || 0,
       tokens: user.tokens || 0,
       tokenLimit: user.token_limit || 0,
+      tokensConsumed: Math.max(0, (user.token_limit || 0) - (user.tokens || 0)),
       username: user.username,
       email: user.username, // Using username as email
       memberSince: user.created_at,
@@ -1464,11 +1466,15 @@ app.get('/api/agents/:id/export', authenticateToken, async (req: any, res) => {
 
     const rules = await db.prepare('SELECT * FROM agent_rules WHERE agent_id = ?').all(agent.id);
     const files = await db.prepare('SELECT * FROM training_files WHERE agent_id = ?').all(agent.id);
+    const memories = await db.prepare('SELECT * FROM agent_memory WHERE agent_id = ?').all(agent.id);
+    const chats = await db.prepare('SELECT * FROM agent_training_chats WHERE agent_id = ?').all(agent.id);
 
     res.json({
       agent,
       rules,
-      files
+      files,
+      memories,
+      chats
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -1504,6 +1510,28 @@ app.post('/api/agents/import', authenticateToken, async (req: any, res) => {
         const filePlaceholders = fileCols.map(() => '?').join(',');
         const fileSql = `INSERT INTO training_files (${fileCols.join(',')}, agent_id) VALUES (${filePlaceholders}, ?)`;
         await db.prepare(fileSql).run(...fileCols.map(k => file[k]), newAgentId);
+      }
+    }
+
+    // Create Memories
+    const memories = req.body.memories;
+    if (memories && memories.length > 0) {
+      for (const mem of memories) {
+        const memCols = Object.keys(mem).filter(k => k !== 'id' && k !== 'agent_id' && k !== 'created_at');
+        const memPlaceholders = memCols.map(() => '?').join(',');
+        const memSql = `INSERT INTO agent_memory (${memCols.join(',')}, agent_id) VALUES (${memPlaceholders}, ?)`;
+        await db.prepare(memSql).run(...memCols.map(k => mem[k]), newAgentId);
+      }
+    }
+
+    // Create Training Chats
+    const chats = req.body.chats;
+    if (chats && chats.length > 0) {
+      for (const chat of chats) {
+        const chatCols = Object.keys(chat).filter(k => k !== 'id' && k !== 'agent_id' && k !== 'created_at');
+        const chatPlaceholders = chatCols.map(() => '?').join(',');
+        const chatSql = `INSERT INTO agent_training_chats (${chatCols.join(',')}, agent_id) VALUES (${chatPlaceholders}, ?)`;
+        await db.prepare(chatSql).run(...chatCols.map(k => chat[k]), newAgentId);
       }
     }
 

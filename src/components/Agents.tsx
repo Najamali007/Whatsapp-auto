@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Plus, Trash2, Edit2, Check, X, Loader2, BrainCircuit, Upload, FileText, AlertCircle, Layers, User, Zap, Sparkles, Target, RefreshCw, MessageSquare, LayoutDashboard, Settings2, ChevronDown, ChevronUp, ChevronLeft, Tag, DollarSign, HelpCircle, Globe } from 'lucide-react';
+import { Users, Plus, Trash2, Edit2, Check, X, Loader2, BrainCircuit, Upload, FileText, AlertCircle, Layers, User, Zap, Sparkles, Target, RefreshCw, MessageSquare, LayoutDashboard, Settings2, ChevronDown, ChevronUp, ChevronLeft, Tag, DollarSign, HelpCircle, Globe, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch } from '../lib/api';
 import { loadingManager } from '../lib/loading';
@@ -276,7 +276,21 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
     if (!targetId) return;
     try {
       const data = await apiFetch(`/api/agents/${targetId}/export`);
+      
+      // Download as file
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `agent_${data.agent?.name || targetId}_export.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      // Also copy to clipboard for convenience
       navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      
       setExportSuccess(true);
       setTimeout(() => setExportSuccess(false), 3000);
     } catch (error: any) {
@@ -447,8 +461,8 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                 </div>
                 <div className="flex items-center gap-2 absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-all">
                   <button onClick={(e) => { e.stopPropagation(); handleExport(agent.id); }}
-                    className="p-1.5 text-gray-300 hover:text-primary transition-colors" title="Export Agent">
-                    <Layers className="w-3.5 h-3.5" />
+                    className="p-1.5 text-gray-300 hover:text-primary transition-colors" title="Download Agent Data">
+                    <Download className="w-3.5 h-3.5" />
                   </button>
                   <button onClick={(e) => { e.stopPropagation(); handleDelete(agent.id); }}
                     className="p-1.5 text-gray-300 hover:text-red-500 transition-colors" title="Delete Agent">

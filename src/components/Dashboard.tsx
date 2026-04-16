@@ -183,7 +183,7 @@ export default function Dashboard({ token }: DashboardProps) {
                 </div>
                 <div className="px-4 py-2 bg-white/5 rounded-xl border border-white/5 flex items-center gap-2">
                   <Zap className="w-4 h-4 text-orange-400" />
-                  <span className="text-xs font-bold">{stats?.tokens || 0} Tokens Consumed</span>
+                  <span className="text-xs font-bold">{stats?.tokensConsumed || 0} Tokens Consumed</span>
                 </div>
               </div>
             </div>
