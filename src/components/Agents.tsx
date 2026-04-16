@@ -81,6 +81,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
   const [importJson, setImportJson] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const [exportSuccess, setExportSuccess] = useState(false);
+  const [agentMemory, setAgentMemory] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
@@ -134,11 +135,24 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
     } catch (e) {}
   };
 
+  const fetchAgentMemory = async (agentId: number) => {
+    try {
+      const data = await apiFetch(`/api/agents/${agentId}/memory`);
+      setAgentMemory(data);
+    } catch (e) {}
+  };
+
   useEffect(() => { fetchAgents(); }, []);
 
   useEffect(() => {
-    if (selectedAgentId) fetchTrainingFiles(selectedAgentId);
-    else setTrainingFiles([]);
+    if (selectedAgentId) {
+      fetchTrainingFiles(selectedAgentId);
+      fetchAgentMemory(selectedAgentId);
+    }
+    else {
+      setTrainingFiles([]);
+      setAgentMemory([]);
+    }
   }, [selectedAgentId]);
 
   const selectedAgent = agents.find(a => a.id === selectedAgentId);
@@ -230,6 +244,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
       });
       if (response.ok) {
         fetchTrainingFiles(agentId);
+        fetchAgentMemory(agentId);
         setUploadSuccess(true);
         setTimeout(() => setUploadSuccess(false), 3000);
       } else {
@@ -249,6 +264,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
     try {
       await apiFetch(`/api/agents/${agentId}/training-files/${fileId}`, { method: 'DELETE' });
       fetchTrainingFiles(agentId);
+      fetchAgentMemory(agentId);
     } catch (e) {}
   };
 
@@ -958,6 +974,58 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                           </div>
                         )}
                       </div>
+
+                      {/* MEMORY PREVIEW (Rules/Knowledge) */}
+                      {uploadCategory !== 'portfolio' && (
+                        <div className="mt-12 bg-gray-50/30 rounded-[2.5rem] p-6 md:p-8 border border-gray-100">
+                          <div className="flex items-center justify-between mb-6">
+                            <div>
+                                <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-900 leading-none">Extracted {uploadCategory} Knowledge</h3>
+                                <p className="text-[10px] font-bold text-gray-400 uppercase mt-1">Rules & Info saved in agent's mind</p>
+                            </div>
+                            <button onClick={() => fetchAgentMemory(selectedAgentId!)} className="p-2 hover:bg-white rounded-xl text-primary transition-all shadow-sm border border-gray-100"><RefreshCw className="w-4 h-4" /></button>
+                        </div>
+
+                        {agentMemory.filter(m => {
+                            if (uploadCategory === 'rules') return m.topic.startsWith('rule_');
+                            if (uploadCategory === 'portfolio') return m.topic.startsWith('portfolio_');
+                            return !m.topic.startsWith('rule_') && !m.topic.startsWith('portfolio_');
+                        }).length > 0 ? (
+                            <div className="space-y-3">
+                                {agentMemory.filter(m => {
+                                    if (uploadCategory === 'rules') return m.topic.startsWith('rule_');
+                                    if (uploadCategory === 'portfolio') return m.topic.startsWith('portfolio_');
+                                    return !m.topic.startsWith('rule_') && !m.topic.startsWith('portfolio_');
+                                }).map(m => (
+                                    <div key={m.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-start justify-between gap-4 group">
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <div className={`w-2 h-2 rounded-full ${m.topic.startsWith('rule_') ? 'bg-red-400' : 'bg-green-400'}`} />
+                                                <span className="text-[10px] font-black uppercase text-gray-400 truncate">{m.topic.replace('rule_', '').replace('portfolio_', '').replace(/_/g, ' ')}</span>
+                                            </div>
+                                            <p className="text-xs font-medium text-slate-700 leading-relaxed">{m.content}</p>
+                                        </div>
+                                        <button 
+                                            onClick={async () => {
+                                                if (confirm('Forget this memory?')) {
+                                                    await apiFetch(`/api/agents/${selectedAgentId}/memory/${m.id}`, { method: 'DELETE' });
+                                                    fetchAgentMemory(selectedAgentId!);
+                                                }
+                                            }}
+                                            className="p-2 text-gray-200 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100"
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="text-center py-8">
+                                <p className="text-[10px] font-bold text-gray-300 uppercase italic">Agent hasn't learned any specific {uploadCategory} details yet.</p>
+                            </div>
+                        )}
+                      </div>
+                      )}
                     </div>
                   ) : activeTrainTab === 'chat' ? (
                     <div className="bg-white border border-gray-100 rounded-[2.5rem] shadow-xl overflow-hidden">

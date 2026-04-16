@@ -1,3 +1,4 @@
+import mime from 'mime-types';
 import {
   makeWASocket,
   DisconnectReason,
@@ -685,7 +686,13 @@ async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: pro
           const urlRegex = /(https?:\/\/[^\s]+)/g;
           triggered = urlRegex.test(triggerText);
         } else if (rule.trigger_type === 'keyword_match') {
-          triggered = triggerText.toLowerCase().includes(rule.trigger_value.toLowerCase());
+          // Smarter keyword match: check for whole word if possible to avoid partial matches
+          const kw = rule.trigger_value.toLowerCase();
+          const target = triggerText.toLowerCase();
+          
+          // Regex for word boundary
+          const regex = new RegExp(`\\b${kw}\\b`, 'i');
+          triggered = regex.test(target) || target.includes(kw); // Fallback to includes if regex fails or for non-latin
         } else if (rule.trigger_type === 'sender_match') {
           triggered = from === rule.trigger_value;
         }
@@ -703,6 +710,11 @@ async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: pro
             await sock.sendMessage(targetJid, { text: `[Forwarded by Agent]\nFrom: ${from}\n\n${savedMsg.text}` });
           } else if (rule.action_type === 'reply_with_template') {
             await sock.sendMessage(from, { text: rule.action_value });
+          } else if (rule.action_type === 'send_file') {
+            const fileRecord = await db.prepare('SELECT filename, original_name FROM training_files WHERE agent_id = ? AND original_name = ?').get(session.agent_id, rule.action_value) as any;
+            if (fileRecord) {
+              await sendFile(sock, from, fileRecord);
+            }
           }
         }
       }
@@ -936,6 +948,7 @@ async function sendFile(sock: WASocket, contactNumber: string, fileRecord: any) 
   if (fs.existsSync(filePath)) {
     const fileExt = path.extname(fileRecord.original_name).toLowerCase();
     const isImage = ['.jpg', '.jpeg', '.png', '.webp'].includes(fileExt);
+    const contentType = mime.lookup(fileExt) || 'application/octet-stream';
     
     try {
       if (isImage) {
@@ -947,10 +960,10 @@ async function sendFile(sock: WASocket, contactNumber: string, fileRecord: any) 
         await sock.sendMessage(contactNumber, { 
           document: fs.readFileSync(filePath), 
           fileName: fileRecord.original_name,
-          mimetype: 'application/octet-stream'
+          mimetype: contentType
         });
       }
-      console.log(`Sent file ${fileRecord.original_name} to ${contactNumber}`);
+      console.log(`Sent file ${fileRecord.original_name} to ${contactNumber} with mimetype ${contentType}`);
       return true;
     } catch (fileErr: any) {
       console.error(`Failed to send file ${fileRecord.original_name}:`, fileErr.message);
@@ -1148,11 +1161,20 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     
     // Load persistent agent memory (from chat training + document training)
     const agentMemories = await db.prepare(
-      'SELECT topic, content, source FROM agent_memory WHERE agent_id = ? ORDER BY updated_at DESC'
+      'SELECT id, topic, content, source FROM agent_memory WHERE agent_id = ? ORDER BY updated_at DESC'
     ).all(agent.id) as any[];
-    const memoryData = agentMemories.length > 0
-      ? agentMemories.map((m: any) => `[${m.source.toUpperCase()} MEMORY] ${m.topic}: ${m.content}`).join('\n')
-      : '';
+    
+    // Group memories by category for clearer AI context
+    const groupedMemory = agentMemories.reduce((acc: any, m: any) => {
+      const cat = m.topic.startsWith('rule_') ? 'RULES' : (m.topic.startsWith('portfolio_') ? 'PORTFOLIOS' : 'GENERAL');
+      if (!acc[cat]) acc[cat] = [];
+      acc[cat].push(`${m.topic}: ${m.content}`);
+      return acc;
+    }, {});
+
+    const memoryContext = Object.entries(groupedMemory).map(([cat, mems]: [string, any]) => {
+      return `--- ${cat} ---\n${mems.join('\n')}`;
+    }).join('\n\n');
 
     // Load agent config (services, pricing rules)
     let agentConfig: any = null;
@@ -1166,69 +1188,6 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
       }
     } catch(e) {}
 
-    // Service-specific custom reply check
-    if (detectedService?.custom_reply || detectedService?.portfolio_file || (detectedService?.portfolios && detectedService?.portfolios.length > 0)) {
-      const timestamp = new Date().toISOString();
-      let replySent = false;
-
-      if (detectedService.custom_reply) {
-        await sock.sendMessage(conversation.contact_number, { text: detectedService.custom_reply });
-        await db.prepare('INSERT INTO messages (conversation_id, sender, content, type, created_at) VALUES (?, ?, ?, ?, ?)')
-          .run(conversation.id, 'agent', detectedService.custom_reply, 'text', timestamp);
-        replySent = true;
-      }
-
-      // Handle multiple portfolios
-      if (detectedService.portfolios && detectedService.portfolios.length > 0) {
-        for (const p of detectedService.portfolios) {
-          if (p.file) {
-            const fileRecord = await db.prepare('SELECT filename, original_name FROM training_files WHERE agent_id = ? AND original_name = ?').get(agent.id, p.file) as any;
-            if (fileRecord) {
-              const sent = await sendFile(sock, conversation.contact_number, fileRecord);
-              if (sent) replySent = true;
-            }
-          }
-          if (p.link) {
-            await sock.sendMessage(conversation.contact_number, { text: p.link });
-            await db.prepare('INSERT INTO messages (conversation_id, sender, content, type, created_at) VALUES (?, ?, ?, ?, ?)')
-              .run(conversation.id, 'agent', p.link, 'text', timestamp);
-            replySent = true;
-          }
-        }
-      } else if (detectedService.portfolio_file) {
-        // Legacy support
-        const fileRecord = await db.prepare('SELECT filename, original_name FROM training_files WHERE agent_id = ? AND original_name = ?').get(agent.id, detectedService.portfolio_file) as any;
-        if (fileRecord) {
-          const sent = await sendFile(sock, conversation.contact_number, fileRecord);
-          if (sent) replySent = true;
-        }
-      }
-
-      if (replySent) {
-        await db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversation.id);
-        
-        let displayContent = detectedService.custom_reply || '';
-        if (detectedService.portfolios && detectedService.portfolios.length > 0) {
-          const portfolioDesc = detectedService.portfolios.map(p => p.file || p.link).join(', ');
-          displayContent += (displayContent ? '\n' : '') + `[Sent Portfolios: ${portfolioDesc}]`;
-        } else if (detectedService.portfolio_file) {
-          displayContent += (displayContent ? '\n' : '') + `[Sent Portfolio: ${detectedService.portfolio_file}]`;
-        }
-
-        io.emit('new_message', { 
-          conversation_id: conversation.id, 
-          sender: 'agent', 
-          content: displayContent, 
-          type: 'text', 
-          created_at: timestamp 
-        });
-        
-        if (session.user_id && !(await checkAndDeductToken(session.user_id, io))) return;
-        
-        return;
-      }
-    }
-
     // Is first message hai is conversation mein?
     const clientName = conversation.contact_name || 'Client';
 
@@ -1237,26 +1196,74 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
       ? "STRICT RULE: NO GREETINGS. Do NOT say 'Hi', 'Hello', 'Assalam-o-Alaikum', 'Hey', or use the client's name at the start. Jump DIRECTLY to answering the client's message."
       : "You may start with a brief, natural greeting (e.g., 'Hi' or 'Hello') since this is your first interaction today. Keep it professional.";
 
-    const systemInstruction = `You are ${agent.name}, a real team member at ${agent.brand_company || 'our company'}. You are NOT a bot or AI — never say otherwise.
+    const systemInstruction = `You are ${agent.name}, a professional team member at ${agent.brand_company || 'our company'}. 
+You are NOT an AI — you are a real human assisting clients on WhatsApp. Talk naturally, be helpful, and build trust.
 
 YOUR IDENTITY:
 - Name: ${agent.name}
 - Company: ${agent.brand_company || 'N/A'}
-- Services: ${agent.product_service || 'N/A'}
-- Goal: ${agent.objective || 'Help clients professionally'}
+- Goal: ${agent.objective || 'Provide professional assistance'}
 
-YOUR KNOWLEDGE — READ THIS FIRST, ALWAYS USE IT:
-IMPORTANT: If you find duplicate instructions, ALWAYS prioritize the most recent or detailed one.
-If a file is labeled "PORTFOLIO", it is a file you can SEND to the user. To send a portfolio file, include [SEND_FILE: filename] in your response (e.g., [SEND_FILE: My_Work.pdf]).
-- ALWAYS check the list of PORTFOLIO files below if a client asks for samples, work, or portfolio.
-- Match the client's request to the most relevant portfolio filename.
-- If "RULES", follow them strictly. They are your core operating policies.
-- If "TRAINING", use it for general knowledge and answering questions.
+YOUR KNOWLEDGE & SERVICES:
+IMPORTANT: Use the information provided below to answer accurately. 
 
-${memoryData || 'Use your identity info above.'}
-${trainingData ? `TRAINING DOCS:\n${trainingData}` : ''}
+SERVICES WE OFFER:
 ${configContext}
-${detectedService ? `DETECTED SERVICE: Client asking about "${detectedService.name}".${detectedService.ask_for ? ` Ask them for: ${detectedService.ask_for.replace('_',' ')}.` : ''}${detectedService.pricing === 'not_allowed' ? ` DO NOT share pricing — say: "${agentConfig?.no_pricing_message}"` : ''}${detectedService.pricing === 'allowed' && detectedService.price_details ? ` Pricing you can share: ${detectedService.price_details}` : ''}` : ''}
+
+${detectedService ? `DETECTED SERVICE SCOPE: The client is currently discussing "${detectedService.name}". 
+- STICK TO THIS SERVICE: Do not mention other services unless the client specifically asks about them.
+- PRICING: If asked for price for ${detectedService.name}, the exact price is: "${detectedService.price_details || 'Ask me for a quote'}". Do not make up prices.
+- PORTFOLIO PROTOCOL: ONLY send a portfolio file if:
+  1. The client explicitly asks for "samples", "work", "portfolio", or "proof".
+  2. The portfolio is relevant to ${detectedService.name}.
+  3. If they haven't asked for work yet, just describe your service naturally.` : ''}
+
+KNOWLEDGE BASE & OPERATING RULES:
+${memoryContext || 'No specific memory found.'}
+${trainingData ? `TRAINING DOCS:\n${trainingData}` : ''}
+
+CONVERSATION STYLE:
+- Language: Match the client's language perfectly. If they use Roman Urdu (Urdu words in English alphabets), you MUST respond in Roman Urdu. e.g., "Ji main bilkul samajh raha hoon."
+- HUMAN PERSONA: You are a friendly, expert team member. Do not be overly corporate. Use natural "filler" words.
+- NO BOT TALK: Avoid "How can I help you?", "Let me know if you need anything else". Instead use "Aur kuch batayiye?", "Main haazir hoon agar koi aur baat hai."
+- SHORT & CRISP: WhatsApp users hate long paragraphs. 1-2 sentences are best.
+- SMART LINKING: If you send a file, follow up with "Did you receive it?" or "Does this look like what you were looking for?".
+
+INTERNAL THOUGHT PROCESS (CRITICAL):
+Before you generate any response, you must internally:
+1. Identify the last 5 messages to understand the conversation flow.
+2. Check your KNOWLEDGE BASE and OPERATING RULES for the correct answer.
+3. If a specific Service is detected, strictly use its Price and Portfolio rules.
+4. Ensure your answer is in the correct language (match the client).
+5. If the client is using Roman Urdu, you MUST use Roman Urdu.
+
+STRICT CONTEXT AWARENESS:
+- You MUST carefully read and analyze at least the last 5 messages in the history below. 
+- Your answer must show that you remember what was previously discussed. 
+- Never ask a question that the user has already answered.
+- If the user is just saying "Theek hai" or "Acha" to a previous info, don't just say "Great", find a way to move the conversation forward naturally like a human.
+
+RELEVANCY & NEW INSTRUCTIONS:
+- PRIORITY: Newer memories (at the top of list) override older ones. If there is a conflict in rules, follow the NEWEST one.
+- 100% ACCURACY: Find the MOST relevant rule for the client's question. Do not give general answers.
+- Exactness: Follow your rules exactly. If a rule says "Send file", you MUST send it.
+
+═══════════════════════════════
+${greetingRule}
+${stageInstruction}
+${intentInstruction}
+
+═══════════════════════════════
+BANNED PHRASES — NEVER USE THESE:
+- "As an AI language model", "I am a bot"
+- "Thanks for reaching out", "How can I assist you today?"
+- "I saw you replied", "I noticed you replied"
+- "Certainly!", "Great question!" (Too robotic)
+
+═══════════════════════════════
+ANTI-REPETITION:
+Previous replies: ${recentAgentMessages.length > 0 ? recentAgentMessages.map(m => m.content).join(' | ') : 'None'}
+Your new reply MUST be unique and not repeat the same structure.
 
 --- FULL CONVERSATION HISTORY ---
 ${conversationHistory.length > 0
@@ -1264,56 +1271,7 @@ ${conversationHistory.length > 0
   : '(First message in this conversation)'}
 --- END HISTORY ---
 
-CLIENT JUST SENT: "${userMessage}"
-
-═══════════════════════════════
-STAGE & CONTEXT:
-${stageInstruction}
-${intentInstruction}
-${lastAgentAskedQuestion ? `Your last message asked a question. Client just answered it. Now give relevant details — do NOT repeat the question.` : ''}
-${isAck ? `Client said ok/thanks/closing — reply with a brief acknowledgment like "You're welcome!", "Ok!", or "Got it!" and nothing else. Do not continue the sales pitch.` : ''}
-${greetingRule}
-
-═══════════════════════════════
-BANNED PHRASES — NEVER USE THESE:
-- "Hi", "Hello", "Hey", "Assalam-o-Alaikum"
-- "Thanks for reaching out"
-- "How can I help you today?"
-- "I saw you replied" / "I noticed you replied"
-- "As per your query"
-- "I am here to help"
-- "Hope this helps"
-- "Certainly!" / "Great question!"
-- "Thank you for contacting us"
-- "How can I assist you?"
-- "I'm [Name] from [Company]" (unless explicitly asked who you are)
-
-═══════════════════════════════
-ANTI-REPETITION — CRITICAL:
-Your previous replies in this conversation:
-${recentAgentMessages.length > 0 ? recentAgentMessages.map((m, i) => `[${i+1}]: "${m.content}"`).join('\n') : '(No previous replies yet)'}
-
-Your new reply MUST differ in:
-- Opening word or phrase (never start the same way twice)
-- Sentence structure
-- Phrasing (even if covering same topic)
-
-═══════════════════════════════
-HUMAN BEHAVIOR RULES:
-- Match client language: Urdu → Urdu, English → English, mixed → mixed
-- Keep reply 1-4 lines max (WhatsApp style)
-- Use natural words: "Sure", "Got it", "Yeah absolutely", "Makes sense", "No worries"
-- Max 1 emoji, only if tone fits naturally
-- NEVER make up info not in your knowledge above
-- If unsure: "Let me confirm and get back to you 🙏"
-- ONE reply only — short, direct, human
-
-═══════════════════════════════
-BEFORE SENDING, CHECK:
-1. Did I say something similar before? → Rephrase completely
-2. Am I using a banned phrase? → Remove it
-3. Does this sound like a real person? → If not, rewrite
-4. Am I actually answering what they asked? → Yes`;
+CLIENT JUST SENT: "${userMessage}"`;
 
     let aiResponse = await callAI(session.user_id, userMessage, systemInstruction);
    

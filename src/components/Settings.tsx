@@ -279,7 +279,10 @@ export default function Settings() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      setMessage({ type: 'success', text: `Agent ${data.agent?.name || id} exported successfully!` });
+      // Copy to clipboard fallback
+      navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+
+      setMessage({ type: 'success', text: `Agent ${data.agent?.name || id} exported and copied to clipboard!` });
     } catch (error: any) {
       setMessage({ type: 'error', text: 'Failed to export agent data' });
     }

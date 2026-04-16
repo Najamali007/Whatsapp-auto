@@ -702,7 +702,13 @@ app.post('/api/agents/:id/train-file', authenticateToken, upload.single('file'),
   try {
     if (fileExtension === '.pdf') {
       const dataBuffer = fs.readFileSync(req.file.path);
-      const data = await pdf(dataBuffer);
+      let data;
+      if (typeof pdf === 'function') {
+        data = await pdf(dataBuffer);
+      } else {
+        // Fallback for some weird import issues
+        data = await (pdf.default || pdf)(dataBuffer);
+      }
       content = data.text;
     } else if (fileExtension === '.docx') {
       const result = await mammoth.extractRawText({ path: req.file.path });
