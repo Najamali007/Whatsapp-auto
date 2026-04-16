@@ -61,6 +61,7 @@ interface Conversation {
   is_rated: number;
   is_audited: number;
   is_autopilot: number;
+  is_group: number;
   platform: 'whatsapp' | 'facebook' | 'instagram';
   audit_status: 'none' | 'added' | 'audited';
   last_message_content?: string;
@@ -68,6 +69,18 @@ interface Conversation {
   objective?: string;
   objective_progress?: number;
   labels?: Label[];
+}
+
+interface WhatsAppStatus {
+  id: number;
+  session_id: number;
+  session_name?: string;
+  contact_number: string;
+  contact_name: string;
+  content: string;
+  type: string;
+  media_url?: string;
+  created_at: string;
 }
 
 interface Contact {
@@ -95,8 +108,9 @@ interface ConversationsProps {
 }
 
 export default function Conversations({ token, initialConversationId, onConversationSelected }: ConversationsProps) {
-  const [activeTab, setActiveTab] = useState<'chats' | 'contacts'>('chats');
+  const [activeTab, setActiveTab] = useState<'chats' | 'groups' | 'status' | 'contacts'>('chats');
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [statuses, setStatuses] = useState<WhatsAppStatus[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
   const [agents, setAgents] = useState<any[]>([]);
@@ -133,6 +147,24 @@ export default function Conversations({ token, initialConversationId, onConversa
       setIsGlobalAutopilot(data.is_global_autopilot);
     } catch (error) {
       console.error('Failed to fetch global autopilot setting');
+    }
+  };
+
+  const deleteStatus = async (id: number) => {
+    try {
+      await apiFetch(`/api/whatsapp/statuses/${id}`, { method: 'DELETE' });
+      setStatuses(prev => prev.filter(s => s.id !== id));
+    } catch (err) {
+      console.error('Failed to delete status');
+    }
+  };
+
+  const clearAllStatuses = async () => {
+    try {
+      await apiFetch('/api/whatsapp/statuses', { method: 'DELETE' });
+      setStatuses([]);
+    } catch (err) {
+      console.error('Failed to clear statuses');
     }
   };
 
@@ -232,6 +264,36 @@ export default function Conversations({ token, initialConversationId, onConversa
     } catch (err: any) {
       console.error('Failed to fetch sessions:', err);
       setError(`Failed to load sessions: ${err.message || 'Please check your connection.'}`);
+    }
+  };
+
+  const fetchStatuses = async () => {
+    try {
+      const data = await apiFetch('/api/whatsapp/statuses');
+      setStatuses(data);
+    } catch (err: any) {
+      console.error('Failed to fetch statuses:', err);
+    }
+  };
+
+  const fetchData = async () => {
+    setIsLoading(true);
+    try {
+      await Promise.all([
+        fetchConversations(),
+        fetchContacts(),
+        fetchSessions(),
+        fetchStatuses(),
+        fetchAgents(),
+        fetchSocialAccounts(),
+        fetchGlobalAutopilot()
+      ]);
+      setError(null);
+    } catch (err: any) {
+      console.error('Error fetching data:', err);
+      setError('Failed to load initial data');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -467,8 +529,9 @@ export default function Conversations({ token, initialConversationId, onConversa
               is_rated: data.is_rated || 0,
               is_audited: data.is_audited || 0,
               is_autopilot: data.is_autopilot || 1,
+              is_group: data.is_group || 0,
               platform: data.platform || 'whatsapp',
-              audit_status: data.audit_status || null
+              audit_status: data.audit_status || 'none'
             };
             return [newConv, ...prev];
           }
@@ -1268,10 +1331,115 @@ export default function Conversations({ token, initialConversationId, onConversa
             )}
           </div>
 
+          {/* Sub-Tabs */}
+          <div className="flex border-b border-gray-100 bg-[#F8F9FB] px-2 shrink-0">
+            {[
+              { id: 'chats', name: 'Chats', icon: MessageSquare },
+              { id: 'groups', name: 'Groups', icon: Users },
+              { id: 'status', name: 'Status', icon: ImageIcon },
+              { id: 'contacts', name: 'Contacts', icon: UserIcon },
+            ].map((tab) => {
+              const TabIcon = tab.icon as any;
+              return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`flex-1 flex flex-col items-center justify-center gap-1 py-3 text-[9px] font-black uppercase tracking-widest transition-all border-b-2 ${
+                  activeTab === tab.id
+                    ? 'border-primary text-primary bg-white'
+                    : 'border-transparent text-gray-400 hover:text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <TabIcon className="w-4 h-4" />
+                {tab.name}
+              </button>
+            )})}
+          </div>
+
           <div className="flex-1 overflow-y-auto overflow-x-hidden">
-            {filteredConversations.length > 0 ? (
-              filteredConversations.map((conv) => (
-                <div key={conv.id} className="relative group">
+            {activeTab === 'status' ? (
+              <div className="flex flex-col flex-1 h-full">
+                <div className="p-3 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                   <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Recent Status</span>
+                   <button 
+                     onClick={clearAllStatuses}
+                     className="text-[9px] font-bold text-red-500 hover:underline"
+                   >
+                     Clear Local
+                   </button>
+                </div>
+                {statuses.length > 0 ? (
+                   statuses.map(status => (
+                     <div key={status.id} className="p-4 border-b border-gray-50 hover:bg-gray-50 group">
+                        <div className="flex items-center gap-3 mb-2">
+                           <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center border-2 border-primary/20">
+                              <User className="w-5 h-5 text-primary" />
+                           </div>
+                           <div className="flex-1 min-w-0">
+                              <h4 className="text-xs font-black text-gray-900 truncate">{status.contact_name}</h4>
+                              <p className="text-[10px] font-bold text-gray-400">{status.session_name} • {new Date(status.created_at).toLocaleString()}</p>
+                           </div>
+                           <button onClick={() => deleteStatus(status.id)} className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-300 hover:text-red-500 transition-all">
+                              <Trash2 className="w-4 h-4" />
+                           </button>
+                        </div>
+                        {status.type === 'image' || status.type === 'video' ? (
+                           <div className="relative rounded-xl overflow-hidden aspect-video bg-black border border-gray-100 shadow-sm">
+                              {status.type === 'image' ? (
+                                <img src={status.media_url} alt="" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                              ) : (
+                                <video src={status.media_url} controls className="w-full h-full" />
+                              )}
+                           </div>
+                        ) : (
+                           <div className="p-4 rounded-xl bg-gray-50 border border-gray-100 italic text-xs text-gray-600">
+                              {status.content}
+                           </div>
+                        )}
+                     </div>
+                   ))
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center p-12 text-center text-gray-400 h-full">
+                    <ImageIcon className="w-12 h-12 mb-4 opacity-10" />
+                    <p className="text-xs font-bold uppercase tracking-widest leading-loose">No status updates yet<br/><span className="text-[9px] font-normal opacity-60">Status updates from your contacts will appear here when fetched</span></p>
+                  </div>
+                )}
+              </div>
+            ) : activeTab === 'contacts' ? (
+              filteredContacts.length > 0 ? (
+                filteredContacts.map((contact) => (
+                  <div
+                    key={contact.id}
+                    onClick={() => {
+                      const existingConv = conversations.find(c => c.contact_number === contact.number);
+                      if (existingConv) {
+                        setSelectedConversation(existingConv.id);
+                        setSelectedSessionId(existingConv.session_id);
+                        setActivePlatform('whatsapp');
+                        setActiveTab('chats');
+                      }
+                    }}
+                    className="flex items-center gap-3 p-4 border-b border-gray-50 hover:bg-gray-50 cursor-pointer transition-all"
+                  >
+                    <div className="w-10 h-10 rounded-2xl bg-gray-100 flex items-center justify-center border-2 border-white shadow-sm overflow-hidden">
+                      <User className="w-5 h-5 text-gray-300" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-black text-gray-900">{contact.name || contact.number}</h3>
+                      <p className="text-[10px] font-bold text-gray-400">{contact.number}</p>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="p-12 text-center text-gray-400">
+                  <User className="w-10 h-10 mx-auto mb-4 opacity-10" />
+                  <p className="text-xs font-bold">No contacts found</p>
+                </div>
+              )
+            ) : (
+              (activeTab === 'chats' ? filteredConversations.filter(c => !c.is_group) : filteredConversations.filter(c => c.is_group)).length > 0 ? (
+                (activeTab === 'chats' ? filteredConversations.filter(c => !c.is_group) : filteredConversations.filter(c => c.is_group)).map((conv) => (
+                  <div key={conv.id} className="relative group">
                   {isAuditBatchMode && (
                     <div className="absolute left-2 top-1/2 -translate-y-1/2 z-10">
                       <input
@@ -1386,7 +1554,7 @@ export default function Conversations({ token, initialConversationId, onConversa
                 <MessageSquare className="w-10 h-10 mx-auto mb-4 opacity-10" />
                 <p className="text-xs font-bold">No chats found</p>
               </div>
-            )}
+            ))}
           </div>
         </div>
 

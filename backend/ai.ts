@@ -674,12 +674,12 @@ Context Category: ${category.toUpperCase()}
 Rules for extraction:
 - Capture ANY specific instruction, fact, or rule shared by the trainer.
 - If category is "rules", prefix topics with "rule_".
-- If category is "portfolio", prefix topics with "portfolio_".
+- SKIP extraction if category is "portfolio" (portfolios are handled via file links).
 - If it's a Q&A instruction ("if asked X, say Y") — topic: "qa_[keyword]", content: full instruction
 - If it's a business rule or policy — topic: "rule_[description]", content: the full rule
 - If it's product, pricing, or service info — topic: "info_[topic]", content: exact details
 - If it contains a link (http/https) — topic: "link_[description]", content: the full URL
-- If it contains a file name or portfolio — topic: "portfolio_[person_name]", content: exact filename/link
+- If it contains a file name or portfolio — SKIP extraction (handled automatically).
 - If it's a communication style or tone rule — topic: "style", content: the rule
 - action: "store" for new info, "update" if topic likely exists, "skip" if no useful knowledge is found.
 
@@ -742,23 +742,9 @@ export async function trainAgentWithDocument(
   const agent = await db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId) as any;
   if (!agent) throw new Error('Agent not found');
 
-  // Special handling for Portfolio category
+  // Special handling for Portfolio category — SKIP text extraction
   if (category === 'portfolio') {
-    const topic = `portfolio_${filename.replace(/\.[^/.]+$/, "").replace(/\s+/g, "_").toLowerCase()}`;
-    const content = `I have a portfolio file named "${filename}". If a client asks for my work, portfolio, or samples related to this, I should send it using [SEND_FILE: ${filename}].`;
-    
-    const existing = await db.prepare(
-      'SELECT id FROM agent_memory WHERE agent_id = ? AND topic = ?'
-    ).get(agentId, topic) as any;
-
-    if (existing) {
-      await db.prepare('UPDATE agent_memory SET content = ?, source = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-        .run(content, 'document', existing.id);
-    } else {
-      await db.prepare('INSERT INTO agent_memory (agent_id, topic, content, source) VALUES (?, ?, ?, ?)')
-        .run(agentId, topic, content, 'document');
-    }
-    return `Portfolio file "${filename}" has been registered in my memory.`;
+    return `Portfolio file "${filename}" has been registered for this agent.`;
   }
 
   // Extract structured knowledge from document (Training or Rules)

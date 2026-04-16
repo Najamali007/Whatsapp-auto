@@ -309,6 +309,26 @@ async function initDb() {
         table.text('profile_pic');
       });
     }
+    const hasIsGroup = await dbProxy.schema.hasColumn('conversations', 'is_group');
+    if (!hasIsGroup) {
+      await dbProxy.schema.table('conversations', (table) => {
+        table.integer('is_group').defaultTo(0);
+      });
+    }
+  }
+
+  const hasStatuses = await dbProxy.schema.hasTable('whatsapp_statuses');
+  if (!hasStatuses) {
+    await dbProxy.schema.createTable('whatsapp_statuses', (table) => {
+      table.increments('id').primary();
+      table.integer('session_id').unsigned().references('id').inTable('whatsapp_sessions').onDelete('CASCADE');
+      table.string('contact_number').notNullable();
+      table.string('contact_name');
+      table.text('content');
+      table.string('type').defaultTo('text'); // 'text', 'image', 'video'
+      table.text('media_url');
+      table.timestamp('created_at').defaultTo(dbProxy.fn.now());
+    });
   }
 
   const hasLeads = await dbProxy.schema.hasTable('leads');

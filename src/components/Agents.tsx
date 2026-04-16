@@ -314,6 +314,21 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
     }
   };
 
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const content = event.target?.result as string;
+        setImportJson(content);
+      } catch (err) {
+        alert('Failed to read file');
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const handleImport = async () => {
     if (!importJson.trim()) return;
     setIsImporting(true);
@@ -988,13 +1003,11 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
 
                         {agentMemory.filter(m => {
                             if (uploadCategory === 'rules') return m.topic.startsWith('rule_');
-                            if (uploadCategory === 'portfolio') return m.topic.startsWith('portfolio_');
                             return !m.topic.startsWith('rule_') && !m.topic.startsWith('portfolio_');
                         }).length > 0 ? (
                             <div className="space-y-3">
                                 {agentMemory.filter(m => {
                                     if (uploadCategory === 'rules') return m.topic.startsWith('rule_');
-                                    if (uploadCategory === 'portfolio') return m.topic.startsWith('portfolio_');
                                     return !m.topic.startsWith('rule_') && !m.topic.startsWith('portfolio_');
                                 }).map(m => (
                                     <div key={m.id} className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-start justify-between gap-4 group">
@@ -1125,22 +1138,43 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                     <X className="w-6 h-6 text-gray-400" />
                   </button>
                 </div>
-                <p className="text-gray-500 text-sm mb-6 font-medium">Paste the agent JSON data below to recreate it exactly.</p>
-                <textarea
-                  value={importJson}
-                  onChange={(e) => setImportJson(e.target.value)}
-                  placeholder='Paste JSON here...'
-                  className="w-full h-64 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-xs font-mono outline-none focus:ring-2 focus:ring-primary/20 resize-none"
-                />
+                <p className="text-gray-500 text-sm mb-6 font-medium">Upload the agent JSON file to recreate it exactly.</p>
+                
+                <div className="mb-6">
+                  <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-200 rounded-3xl cursor-pointer hover:bg-gray-50 hover:border-primary/50 transition-all group">
+                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                      <Upload className="w-8 h-8 text-gray-400 group-hover:text-primary mb-2 transition-all" />
+                      <p className="text-xs font-black uppercase tracking-widest text-gray-500 group-hover:text-primary">
+                        {importJson ? 'File Selected ✓' : 'Click to upload JSON'}
+                      </p>
+                    </div>
+                    <input type="file" className="hidden" accept=".json" onChange={handleImportFile} />
+                  </label>
+                </div>
+
+                {importJson && (
+                  <div className="mb-6">
+                    <div className="flex items-center justify-between mb-2">
+                       <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Preview Data</span>
+                       <button onClick={() => setImportJson('')} className="text-[10px] font-black uppercase text-red-500 hover:underline">Clear</button>
+                    </div>
+                    <textarea
+                      value={importJson}
+                      readOnly
+                      className="w-full h-32 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-[10px] font-mono outline-none resize-none overflow-y-auto"
+                    />
+                  </div>
+                )}
+
                 <div className="mt-8 flex gap-4">
-                  <button onClick={() => setShowImportModal(false)}
+                  <button onClick={() => { setShowImportModal(false); setImportJson(''); }}
                     className="flex-1 py-4 rounded-2xl font-black uppercase tracking-widest text-xs border border-gray-200 text-gray-600 hover:bg-gray-50 transition-all">
                     Cancel
                   </button>
                   <button onClick={handleImport} disabled={isImporting || !importJson.trim()}
                     className="flex-1 py-4 bg-primary text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-primary/20 hover:bg-primary/90 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
-                    {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                    Import Agent
+                    {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                    Confirm Import
                   </button>
                 </div>
               </div>

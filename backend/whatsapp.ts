@@ -354,7 +354,11 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer, f
   sock.ev.on('messages.upsert', async (m) => {
     if (m.type === 'notify') {
       for (const msg of m.messages) {
-        if (msg.key.remoteJid === 'status@broadcast') continue;
+        if (msg.key.remoteJid === 'status@broadcast') {
+          // Handle Status Update
+          await handleStatusUpdate(sessionId, sock, msg, io);
+          continue;
+        }
 
         // Save pushName to contacts immediately
         if (msg.pushName && msg.key.remoteJid) {
@@ -380,6 +384,52 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer, f
 
 export function getQrCode(sessionId: string) {
   return qrCache[sessionId];
+}
+
+async function handleStatusUpdate(sessionId: string, sock: WASocket, msg: proto.IWebMessageInfo, io: SocketIOServer) {
+  try {
+    const from = msg.key.participant || msg.participant || '';
+    if (!from) return;
+
+    let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+    let type = 'text';
+    let mediaUrl = null;
+
+    if (msg.message?.imageMessage) {
+      type = 'image';
+      const buffer = await downloadMediaMessage(msg as any, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage }) as Buffer;
+      const filename = `status_media_${Date.now()}.jpg`;
+      const filePath = path.join(uploadsDir, filename);
+      fs.writeFileSync(filePath, buffer!);
+      mediaUrl = `/uploads/${filename}`;
+    } else if (msg.message?.videoMessage) {
+      type = 'video';
+      const buffer = await downloadMediaMessage(msg as any, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage }) as Buffer;
+      const filename = `status_media_${Date.now()}.mp4`;
+      const filePath = path.join(uploadsDir, filename);
+      fs.writeFileSync(filePath, buffer!);
+      mediaUrl = `/uploads/${filename}`;
+    }
+
+    const contactName = msg.pushName || from.split('@')[0];
+    
+    await db.prepare(`
+      INSERT INTO whatsapp_statuses (session_id, contact_number, contact_name, content, type, media_url)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(sessionId, from, contactName, text, type, mediaUrl);
+
+    io.emit('new_status', {
+      session_id: sessionId,
+      contact_number: from,
+      contact_name: contactName,
+      content: text,
+      type,
+      media_url: mediaUrl,
+      created_at: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error handling status update:', err);
+  }
 }
 
 async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMessageInfo, io: SocketIOServer, shouldEmit: boolean = true) {
@@ -521,6 +571,7 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
 
   // Get or create conversation
   let conversation = await db.prepare('SELECT * FROM conversations WHERE session_id = ? AND contact_number = ?').get(sessionId, from) as any;
+  const isGroup = from.endsWith('@g.us') ? 1 : 0;
   
   // FORCEFUL GLOBAL RETRIEVAL: Check if this number was saved or named in ANY other session or contact list
   const globalContact = await db.prepare(`
@@ -540,8 +591,8 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
     const result = await db.prepare(`
       INSERT INTO conversations (
         session_id, contact_number, unread_count, contact_name, 
-        is_saved, is_ordered, is_rated, is_audited, is_autopilot
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        is_saved, is_ordered, is_rated, is_audited, is_autopilot, is_group
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       sessionId, 
       from, 
@@ -551,7 +602,8 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
       globalContact?.is_ordered || 0,
       globalContact?.is_rated || 0,
       globalContact?.is_audited || 0,
-      globalContact?.is_autopilot !== undefined && globalContact.is_autopilot !== null ? globalContact.is_autopilot : 1
+      globalContact?.is_autopilot !== undefined && globalContact.is_autopilot !== null ? globalContact.is_autopilot : (isGroup ? 0 : 1),
+      isGroup
     );
     conversation = { id: result.lastInsertRowid };
   } else {
@@ -1213,10 +1265,10 @@ ${configContext}
 ${detectedService ? `DETECTED SERVICE SCOPE: The client is currently discussing "${detectedService.name}". 
 - STICK TO THIS SERVICE: Do not mention other services unless the client specifically asks about them.
 - PRICING: If asked for price for ${detectedService.name}, the exact price is: "${detectedService.price_details || 'Ask me for a quote'}". Do not make up prices.
-- PORTFOLIO PROTOCOL: ONLY send a portfolio file if:
-  1. The client explicitly asks for "samples", "work", "portfolio", or "proof".
-  2. The portfolio is relevant to ${detectedService.name}.
-  3. If they haven't asked for work yet, just describe your service naturally.` : ''}
+- PORTFOLIO PROTOCOL: ONLY provide a portfolio if the client explicitly asks for "samples", "work", "portfolio", or "proof".
+  1. If they ask, you MUST use the exact tag: [PORTFOLIO_TRIGGER: ${detectedService.name}]
+  2. Do NOT mention portfolios if they haven't asked for them yet.
+  3. If they ask for work related to ${detectedService.name}, just reply naturally and include the tag at the end.` : ''}
 
 KNOWLEDGE BASE & OPERATING RULES:
 ${memoryContext || 'No specific memory found.'}
@@ -1259,6 +1311,7 @@ BANNED PHRASES — NEVER USE THESE:
 - "Thanks for reaching out", "How can I assist you today?"
 - "I saw you replied", "I noticed you replied"
 - "Certainly!", "Great question!" (Too robotic)
+- "I hope this helps", "Feel free to ask"
 
 ═══════════════════════════════
 ANTI-REPETITION:
@@ -1275,15 +1328,35 @@ CLIENT JUST SENT: "${userMessage}"`;
 
     let aiResponse = await callAI(session.user_id, userMessage, systemInstruction);
    
-    // 10. Detect and handle file sending command [SEND_FILE: filename]
-    let fileToSend = null;
+    // 10. Detect and handle triggers: [PORTFOLIO_TRIGGER: Service Name] or [SEND_FILE: filename]
+    const portfoliosToSend: any[] = [];
+    const portfolioMatch = aiResponse.match(/\[PORTFOLIO_TRIGGER:\s*(.*?)\]/);
+    if (portfolioMatch) {
+      const serviceName = portfolioMatch[1].trim();
+      const service = agentConfig?.services?.find((s: any) => s.name.toLowerCase() === serviceName.toLowerCase());
+      if (service) {
+        if (service.portfolios && service.portfolios.length > 0) {
+          for (const p of service.portfolios) {
+            if (p.file) {
+              const fileRecord = await db.prepare('SELECT filename, original_name FROM training_files WHERE agent_id = ? AND original_name = ?').get(agent.id, p.file) as any;
+              if (fileRecord) portfoliosToSend.push({ type: 'file', data: fileRecord });
+            }
+            if (p.link) portfoliosToSend.push({ type: 'link', data: p.link });
+          }
+        } else if (service.portfolio_file) {
+          const fileRecord = await db.prepare('SELECT filename, original_name FROM training_files WHERE agent_id = ? AND original_name = ?').get(agent.id, service.portfolio_file) as any;
+          if (fileRecord) portfoliosToSend.push({ type: 'file', data: fileRecord });
+        }
+      }
+      aiResponse = aiResponse.replace(portfolioMatch[0], '').trim();
+    }
+
     const fileMatch = aiResponse.match(/\[SEND_FILE:\s*(.*?)\]/);
     if (fileMatch) {
       const originalName = fileMatch[1].trim();
       const fileRecord = await db.prepare('SELECT filename, original_name FROM training_files WHERE agent_id = ? AND original_name = ?').get(agent.id, originalName) as any;
       if (fileRecord) {
-        fileToSend = fileRecord;
-        // Remove the command from the text response
+        portfoliosToSend.push({ type: 'file', data: fileRecord });
         aiResponse = aiResponse.replace(fileMatch[0], '').trim();
       }
     }
@@ -1348,11 +1421,19 @@ CLIENT JUST SENT: "${userMessage}"`;
       replySent = true;
     }
 
-    // Handle file sending if detected
-    if (fileToSend) {
-      if (session.user_id && !(await checkAndDeductToken(session.user_id, io))) return;
-      const sent = await sendFile(sock, conversation.contact_number, fileToSend);
-      if (sent) replySent = true;
+    // Handle portfolio triggers if detected
+    if (portfoliosToSend.length > 0) {
+      for (const p of portfoliosToSend) {
+        if (session.user_id && !(await checkAndDeductToken(session.user_id, io))) break;
+        if (p.type === 'file') {
+          await sendFile(sock, conversation.contact_number, p.data);
+        } else if (p.type === 'link') {
+          await sock.sendMessage(conversation.contact_number, { text: p.data });
+        }
+        replySent = true;
+        // Small delay between multiple files
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
     }
 
     // Update Timestamps

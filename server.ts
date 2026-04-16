@@ -62,7 +62,8 @@ app.use((req, res, next) => {
 });
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Health check route
 app.get('/api/health', (req, res) => {
@@ -1030,6 +1031,35 @@ app.get('/api/conversations', authenticateToken, async (req: any, res) => {
   } catch (error) {
     console.error('Failed to fetch conversations:', error);
     res.status(500).json({ error: 'Failed to fetch conversations' });
+  }
+});
+
+app.get('/api/whatsapp/statuses', authenticateToken, async (req: any, res) => {
+  try {
+    const statuses = await db.prepare(`
+      SELECT s.*, ws.name as session_name 
+      FROM whatsapp_statuses s
+      JOIN whatsapp_sessions ws ON s.session_id = ws.id
+      WHERE ws.user_id = ?
+      ORDER BY s.created_at DESC
+      LIMIT 100
+    `).all(req.user.id);
+    res.json(statuses);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch statuses' });
+  }
+});
+
+app.delete('/api/whatsapp/statuses', authenticateToken, async (req: any, res) => {
+  try {
+    const sessions = await db.prepare('SELECT id FROM whatsapp_sessions WHERE user_id = ?').all(req.user.id) as any[];
+    const sessionIds = sessions.map(s => s.id);
+    if (sessionIds.length > 0) {
+      await db.prepare(`DELETE FROM whatsapp_statuses WHERE session_id IN (${sessionIds.join(',')})`).run();
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete statuses' });
   }
 });
 
