@@ -36,9 +36,11 @@ function isValidJid(jid: string): boolean {
   if (!jid || jid === 'status@broadcast') return false;
   const number = jid.split('@')[0];
   // Filter out obviously fake/demo numbers
-  const fakeNumbers = ['1234567890', '0000000000', '1111111111', '12345', '9999999999'];
+  const fakeNumbers = ['1234567890', '0000000000', '1111111111', '12345', '9999999999', '12345678', '8888888888'];
   if (fakeNumbers.includes(number)) return false;
   if (number.length < 5) return false;
+  // WhatsApp numbers are usually 10-15 digits
+  if (!/^\d+$/.test(number)) return false;
   return true;
 }
 
@@ -584,6 +586,17 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
     await db.prepare('UPDATE conversations SET contact_name = ? WHERE id = ?').run(msg.pushName, conversation.id);
     // Also update contacts table
     await db.prepare('INSERT OR REPLACE INTO contacts (session_id, jid, name, number) VALUES (?, ?, ?, ?)').run(sessionId, from, msg.pushName, from.split('@')[0]);
+    
+    // Fetch profile picture in background
+    if (sock) {
+      sock.profilePictureUrl(from, 'image').then(async (url) => {
+        if (url) {
+          await db.prepare('UPDATE conversations SET profile_pic = ? WHERE id = ?').run(url, conversation.id);
+          await db.prepare('UPDATE contacts SET profile_pic = ? WHERE jid = ?').run(url, from);
+          io.emit('new_message', { conversation_id: conversation.id, profile_pic: url });
+        }
+      }).catch(() => {});
+    }
   } else if (conversation && !conversation.contact_name) {
     // Try contacts table
     const contact = await db.prepare('SELECT name FROM contacts WHERE (session_id = ? AND jid = ?) OR (jid = ?) ORDER BY name DESC LIMIT 1').get(sessionId, from, from) as any;
@@ -637,7 +650,7 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
 
 async function handleIncomingMessage(sessionId: string, sock: WASocket, msg: proto.IWebMessageInfo, io: SocketIOServer) {
   const from = msg.key.remoteJid;
-  if (!from) return;
+  if (!from || !isValidJid(from)) return;
 
   console.log(`Received message from ${from} in session ${sessionId}`);
   

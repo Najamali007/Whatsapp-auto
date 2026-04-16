@@ -494,6 +494,10 @@ export default function Conversations({ token, initialConversationId, onConversa
         if (data.contact_name) {
           conv.contact_name = data.contact_name;
         }
+
+        if (data.profile_pic) {
+          conv.profile_pic = data.profile_pic;
+        }
         
         if (data.is_autopilot !== undefined) {
           conv.is_autopilot = data.is_autopilot;
@@ -1364,12 +1368,8 @@ export default function Conversations({ token, initialConversationId, onConversa
                         </span>
                       </div>
                       <div className="flex justify-between items-center">
-                        <p className="text-xs text-gray-500 truncate max-w-[180px]">
-                          {conv.unread_count > 0 ? (
-                            <span className="text-gray-900 font-medium">New message...</span>
-                          ) : (
-                            conv.last_message || conv.last_message_content || 'No messages yet'
-                          )}
+                        <p className={`text-xs line-clamp-2 ${conv.unread_count > 0 ? 'text-gray-900 font-bold' : 'text-gray-500'}`}>
+                          {conv.last_message || conv.last_message_content || 'No messages yet'}
                         </p>
                         {conv.unread_count > 0 && (
                           <div className="w-4 h-4 bg-primary text-white text-[10px] font-bold rounded-full flex items-center justify-center">
