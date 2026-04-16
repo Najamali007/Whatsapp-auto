@@ -872,6 +872,17 @@ function buildConfigContext(config: any, agent: any): string {
     if (s.pricing === 'allowed' && s.price_details) line += ` — Price: ${s.price_details}`;
     if (s.pricing === 'not_allowed') line += ` — Pricing not shared until analysis`;
     if (s.ask_for) line += ` — Ask client for: ${s.ask_for}`;
+    
+    const portfolios = [];
+    if (s.portfolio_file) portfolios.push(`File: ${s.portfolio_file}`);
+    if (s.portfolios?.length) {
+      s.portfolios.forEach((p: any) => {
+        if (p.file) portfolios.push(`File: ${p.file}`);
+        if (p.link) portfolios.push(`Link: ${p.link}`);
+      });
+    }
+    if (portfolios.length) line += ` — Portfolios: ${portfolios.join(', ')}`;
+    
     return line;
   }).join('\n');
 
@@ -1126,7 +1137,7 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
     } catch(e) {}
 
     // Service-specific custom reply check
-    if (detectedService?.custom_reply || detectedService?.portfolio_file) {
+    if (detectedService?.custom_reply || detectedService?.portfolio_file || (detectedService?.portfolios && detectedService?.portfolios.length > 0)) {
       const timestamp = new Date().toISOString();
       let replySent = false;
 
@@ -1137,7 +1148,25 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
         replySent = true;
       }
 
-      if (detectedService.portfolio_file) {
+      // Handle multiple portfolios
+      if (detectedService.portfolios && detectedService.portfolios.length > 0) {
+        for (const p of detectedService.portfolios) {
+          if (p.file) {
+            const fileRecord = await db.prepare('SELECT filename, original_name FROM training_files WHERE agent_id = ? AND original_name = ?').get(agent.id, p.file) as any;
+            if (fileRecord) {
+              const sent = await sendFile(sock, conversation.contact_number, fileRecord);
+              if (sent) replySent = true;
+            }
+          }
+          if (p.link) {
+            await sock.sendMessage(conversation.contact_number, { text: p.link });
+            await db.prepare('INSERT INTO messages (conversation_id, sender, content, type, created_at) VALUES (?, ?, ?, ?, ?)')
+              .run(conversation.id, 'agent', p.link, 'text', timestamp);
+            replySent = true;
+          }
+        }
+      } else if (detectedService.portfolio_file) {
+        // Legacy support
         const fileRecord = await db.prepare('SELECT filename, original_name FROM training_files WHERE agent_id = ? AND original_name = ?').get(agent.id, detectedService.portfolio_file) as any;
         if (fileRecord) {
           const sent = await sendFile(sock, conversation.contact_number, fileRecord);
@@ -1147,10 +1176,19 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
 
       if (replySent) {
         await db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversation.id);
+        
+        let displayContent = detectedService.custom_reply || '';
+        if (detectedService.portfolios && detectedService.portfolios.length > 0) {
+          const portfolioDesc = detectedService.portfolios.map(p => p.file || p.link).join(', ');
+          displayContent += (displayContent ? '\n' : '') + `[Sent Portfolios: ${portfolioDesc}]`;
+        } else if (detectedService.portfolio_file) {
+          displayContent += (displayContent ? '\n' : '') + `[Sent Portfolio: ${detectedService.portfolio_file}]`;
+        }
+
         io.emit('new_message', { 
           conversation_id: conversation.id, 
           sender: 'agent', 
-          content: detectedService.custom_reply || `[Sent Portfolio: ${detectedService.portfolio_file}]`, 
+          content: displayContent, 
           type: 'text', 
           created_at: timestamp 
         });

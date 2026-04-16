@@ -13,7 +13,8 @@ interface Service {
   pricing: 'allowed' | 'not_allowed';
   price_details?: string;
   custom_reply?: string;
-  portfolio_file?: string;
+  portfolio_file?: string; // Legacy
+  portfolios?: { file?: string; link?: string }[];
 }
 
 interface AgentConfig {
@@ -310,7 +311,7 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
   // ── Services Builder helpers ──────────────────────────────
   const addService = () => {
     const id = `svc_${Date.now()}`;
-    const newSvc: Service = { id, name: '', keywords: [], ask_for: '', pricing: 'not_allowed', price_details: '', custom_reply: '', portfolio_file: '' };
+    const newSvc: Service = { id, name: '', keywords: [], ask_for: '', pricing: 'not_allowed', price_details: '', custom_reply: '', portfolio_file: '', portfolios: [] };
     setAgentConfig(prev => ({ ...prev, services: [...prev.services, newSvc] }));
     setExpandedService(id);
   };
@@ -319,6 +320,39 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
     setAgentConfig(prev => ({
       ...prev,
       services: prev.services.map(s => s.id === id ? { ...s, [field]: value } : s)
+    }));
+  };
+
+  const addPortfolio = (serviceId: string) => {
+    setAgentConfig(prev => ({
+      ...prev,
+      services: prev.services.map(s => s.id === serviceId
+        ? { ...s, portfolios: [...(s.portfolios || []), { file: '', link: '' }] }
+        : s
+      )
+    }));
+  };
+
+  const updatePortfolio = (serviceId: string, index: number, field: 'file' | 'link', value: string) => {
+    setAgentConfig(prev => ({
+      ...prev,
+      services: prev.services.map(s => s.id === serviceId
+        ? {
+            ...s,
+            portfolios: (s.portfolios || []).map((p, i) => i === index ? { ...p, [field]: value } : p)
+          }
+        : s
+      )
+    }));
+  };
+
+  const removePortfolio = (serviceId: string, index: number) => {
+    setAgentConfig(prev => ({
+      ...prev,
+      services: prev.services.map(s => s.id === serviceId
+        ? { ...s, portfolios: (s.portfolios || []).filter((_, i) => i !== index) }
+        : s
+      )
     }));
   };
 
@@ -717,23 +751,89 @@ export default function Agents({ token, initialAgentId, onNavigate }: AgentsProp
                               </div>
 
                               {/* Portfolio Selection */}
-                              <div>
-                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 flex items-center gap-2">
-                                  <FileText className="w-3 h-3" /> Portfolio to Send (optional)
-                                </label>
-                                <select 
-                                  value={svc.portfolio_file || ''}
-                                  className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-primary/20"
-                                  onChange={e => updateService(svc.id, 'portfolio_file', e.target.value)}
-                                >
-                                  <option value="">— No Portfolio —</option>
-                                  {trainingFiles.filter(f => f.category === 'portfolio').map(file => (
-                                    <option key={file.id} value={file.original_name}>
-                                      {file.original_name}
-                                    </option>
+                              <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                                    <FileText className="w-3 h-3" /> Portfolio(s) to Send (optional)
+                                  </label>
+                                  <button 
+                                    onClick={() => addPortfolio(svc.id)}
+                                    className="flex items-center gap-1 text-[10px] font-black text-primary uppercase hover:bg-primary/5 px-2 py-1 rounded-lg transition-all"
+                                  >
+                                    <Plus className="w-3 h-3" /> Add Portfolio
+                                  </button>
+                                </div>
+
+                                <div className="space-y-3">
+                                  {(svc.portfolios || []).map((p, pIdx) => (
+                                    <div key={`${svc.id}_p_${pIdx}`} className="bg-white border border-gray-200 rounded-xl p-3 space-y-3 relative group/p">
+                                      <button 
+                                        onClick={() => removePortfolio(svc.id, pIdx)}
+                                        className="absolute -top-2 -right-2 w-6 h-6 bg-white border border-gray-200 rounded-full flex items-center justify-center text-gray-400 hover:text-red-500 hover:border-red-200 shadow-sm transition-all"
+                                      >
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                      
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div>
+                                          <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest block mb-1">Select File</label>
+                                          <select 
+                                            value={p.file || ''}
+                                            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                                            onChange={e => updatePortfolio(svc.id, pIdx, 'file', e.target.value)}
+                                          >
+                                            <option value="">— No File —</option>
+                                            {trainingFiles.filter(f => f.category === 'portfolio').map(file => (
+                                              <option key={file.id} value={file.original_name}>
+                                                {file.original_name}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                        <div>
+                                          <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest block mb-1">Or Video/Web Link</label>
+                                          <div className="relative">
+                                            <Globe className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
+                                            <input 
+                                              type="text" 
+                                              placeholder="https://youtube.com/..."
+                                              value={p.link || ''}
+                                              className="w-full bg-gray-50 border border-gray-200 rounded-lg pl-7 pr-2 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-primary/20"
+                                              onChange={e => updatePortfolio(svc.id, pIdx, 'link', e.target.value)}
+                                            />
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
                                   ))}
-                                </select>
-                                <p className="text-[10px] text-gray-400 mt-1">If this service is triggered, this portfolio file will be sent automatically.</p>
+
+                                  {/* Legacy single file support (migration) */}
+                                  {svc.portfolio_file && (!svc.portfolios || svc.portfolios.length === 0) && (
+                                    <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 flex items-center justify-between">
+                                      <div className="flex items-center gap-2">
+                                        <FileText className="w-4 h-4 text-amber-500" />
+                                        <span className="text-xs font-bold text-amber-700">{svc.portfolio_file}</span>
+                                      </div>
+                                      <button 
+                                        onClick={() => {
+                                          const currentPortfolios = svc.portfolios || [];
+                                          updateService(svc.id, 'portfolios', [...currentPortfolios, { file: svc.portfolio_file, link: '' }]);
+                                          updateService(svc.id, 'portfolio_file', '');
+                                        }}
+                                        className="text-[10px] font-black text-amber-600 uppercase hover:underline"
+                                      >
+                                        Migrate to Multi
+                                      </button>
+                                    </div>
+                                  )}
+
+                                  {(svc.portfolios || []).length === 0 && !svc.portfolio_file && (
+                                    <div className="text-center py-4 bg-gray-50/50 border border-dashed border-gray-200 rounded-xl">
+                                      <p className="text-[10px] font-bold text-gray-400 uppercase">No portfolios added</p>
+                                    </div>
+                                  )}
+                                </div>
+                                <p className="text-[10px] text-gray-400 mt-1">If this service is triggered, these portfolios will be sent automatically.</p>
                               </div>
                             </motion.div>
                           )}
