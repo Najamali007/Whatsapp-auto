@@ -433,8 +433,21 @@ export async function extractLeadInfo(userId: number, conversationId: number, me
     if (jsonMatch) {
       const data = JSON.parse(jsonMatch[0]);
       
+      // Get contact number from conversation
+      const conv = await db.prepare('SELECT contact_number FROM conversations WHERE id = ?').get(conversationId) as any;
+      const contactNumber = conv?.contact_number;
+
       // Update lead even if website is missing
-      const existingLead = await db.prepare('SELECT id, status, qualified_at FROM leads WHERE conversation_id = ?').get(conversationId) as any;
+      // Try to find by conversation_id OR by (user_id AND contact_number)
+      let existingLead = await db.prepare('SELECT id, status, qualified_at FROM leads WHERE conversation_id = ?').get(conversationId) as any;
+      if (!existingLead && contactNumber) {
+        existingLead = await db.prepare('SELECT id, status, qualified_at FROM leads WHERE user_id = ? AND contact_number = ?').get(userId, contactNumber) as any;
+        if (existingLead) {
+          // Link this conversation to existing lead
+          await db.prepare('UPDATE leads SET conversation_id = ? WHERE id = ?').run(conversationId, existingLead.id);
+        }
+      }
+
       if (existingLead) {
         let qualifiedAt = existingLead.qualified_at;
         if (data.status === 'Qualified' && existingLead.status !== 'Qualified' && !qualifiedAt) {
@@ -446,12 +459,12 @@ export async function extractLeadInfo(userId: number, conversationId: number, me
           await db.prepare('INSERT INTO activities (user_id, type, description) VALUES (?, ?, ?)')
             .run(userId, 'customer_converted', `Lead ${data.name || 'Unknown'} has been converted to a customer.`);
         }
-        await db.prepare('UPDATE leads SET name = COALESCE(?, name), email = COALESCE(?, email), website = COALESCE(?, website), status = COALESCE(?, status), service_interest = COALESCE(?, service_interest), objections = COALESCE(?, objections), qualified_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-          .run(data.name || null, data.email || null, data.website || null, data.status || null, data.service_interest || null, data.objections || null, qualifiedAt, existingLead.id);
+        await db.prepare('UPDATE leads SET name = COALESCE(?, name), email = COALESCE(?, email), website = COALESCE(?, website), status = COALESCE(?, status), service_interest = COALESCE(?, service_interest), objections = COALESCE(?, objections), qualified_at = ?, contact_number = COALESCE(?, contact_number), updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run(data.name || null, data.email || null, data.website || null, data.status || null, data.service_interest || null, data.objections || null, qualifiedAt, contactNumber || null, existingLead.id);
       } else {
         const qualifiedAt = data.status === 'Qualified' ? new Date().toISOString() : null;
-        await db.prepare('INSERT INTO leads (user_id, conversation_id, name, email, website, source, status, service_interest, objections, is_new, qualified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-          .run(userId, conversationId, data.name || null, data.email || null, data.website || null, 'WhatsApp', data.status || 'New', data.service_interest || null, data.objections || null, 1, qualifiedAt);
+        await db.prepare('INSERT INTO leads (user_id, conversation_id, contact_number, name, email, website, source, status, service_interest, objections, is_new, qualified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(userId, conversationId, contactNumber || null, data.name || null, data.email || null, data.website || null, 'WhatsApp', data.status || 'New', data.service_interest || null, data.objections || null, 1, qualifiedAt);
         
         await db.prepare('INSERT INTO activities (user_id, type, description) VALUES (?, ?, ?)')
           .run(userId, 'lead_added', `New lead ${data.name || 'Unknown'} added from WhatsApp.`);

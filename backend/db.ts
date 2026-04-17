@@ -225,7 +225,8 @@ async function initDb() {
   if (!hasConversations) {
     await dbProxy.schema.createTable('conversations', (table) => {
       table.increments('id').primary();
-      table.integer('session_id').unsigned().references('id').inTable('whatsapp_sessions').onDelete('CASCADE');
+      table.integer('user_id').unsigned().references('id').inTable('users').onDelete('SET NULL');
+      table.integer('session_id').unsigned().references('id').inTable('whatsapp_sessions').onDelete('SET NULL');
       table.string('contact_number').notNullable();
       table.string('contact_name');
       table.string('platform').defaultTo('whatsapp');
@@ -336,7 +337,8 @@ async function initDb() {
     await dbProxy.schema.createTable('leads', (table) => {
       table.increments('id').primary();
       table.integer('user_id').unsigned().references('id').inTable('users').onDelete('CASCADE');
-      table.integer('conversation_id').unsigned().references('id').inTable('conversations').onDelete('CASCADE');
+      table.integer('conversation_id').unsigned().references('id').inTable('conversations').onDelete('SET NULL');
+      table.string('contact_number').nullable();
       table.string('name');
       table.string('email');
       table.string('website');
@@ -377,6 +379,18 @@ async function initDb() {
         table.timestamp('qualified_at');
         table.integer('manual_followup_count').defaultTo(0);
         table.integer('auto_followup_count').defaultTo(0);
+      });
+    }
+    const hasContactNumberLead = await dbProxy.schema.hasColumn('leads', 'contact_number');
+    if (!hasContactNumberLead) {
+      await dbProxy.schema.table('leads', (table) => {
+        table.string('contact_number').nullable();
+      });
+    }
+    const hasUserIdConv = await dbProxy.schema.hasColumn('conversations', 'user_id');
+    if (!hasUserIdConv) {
+      await dbProxy.schema.table('conversations', (table) => {
+        table.integer('user_id').unsigned().references('id').inTable('users').onDelete('SET NULL');
       });
     }
   }
@@ -634,6 +648,19 @@ async function initDb() {
       table.string('source').defaultTo('Manual Entry');
       table.timestamp('created_at').defaultTo(dbProxy.fn.now());
       table.unique(['user_id', 'number']);
+    });
+  }
+
+  const hasWALabels = await dbProxy.schema.hasTable('whatsapp_labels');
+  if (!hasWALabels) {
+    await dbProxy.schema.createTable('whatsapp_labels', (table) => {
+      table.increments('id').primary();
+      table.integer('session_id').unsigned().references('id').inTable('whatsapp_sessions').onDelete('CASCADE');
+      table.string('label_id').notNullable();
+      table.string('name').notNullable();
+      table.string('color');
+      table.timestamp('created_at').defaultTo(dbProxy.fn.now());
+      table.unique(['session_id', 'label_id']);
     });
   }
 

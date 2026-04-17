@@ -205,6 +205,27 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer, f
   });
 
   sock.ev.on('creds.update', saveCreds);
+  
+  // Official WhatsApp Business Labels Sync
+  (sock.ev as any).on('labels.set', async (labels: any[]) => {
+    console.log(`Syncing ${labels.length} labels for session ${sessionId}`);
+    await db.exec('BEGIN TRANSACTION');
+    try {
+      for (const label of labels) {
+        await db.prepare('INSERT OR REPLACE INTO whatsapp_labels (session_id, label_id, name, color) VALUES (?, ?, ?, ?)')
+          .run(sessionId, label.id, label.name, label.color || null);
+      }
+      await db.exec('COMMIT');
+    } catch (e) {
+      await db.exec('ROLLBACK');
+      console.error('Labels sync error:', e);
+    }
+  });
+
+  (sock.ev as any).on('labels.edit', async (label: any) => {
+    await db.prepare('INSERT OR REPLACE INTO whatsapp_labels (session_id, label_id, name, color) VALUES (?, ?, ?, ?)')
+      .run(sessionId, label.id, label.name, label.color || null);
+  });
 
   sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, isLatest }) => {
     console.log(`Syncing history for session ${sessionId}: ${chats.length} chats, ${contacts.length} contacts, ${messages.length} messages`);
@@ -240,11 +261,22 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer, f
 
       // Sync chats (conversations)
       io.emit('sync_status', { sessionId, sessionName, status: 'syncing', progress: 5, message: 'Syncing chats...' });
+      
+      const sessionInfo = await db.prepare('SELECT user_id FROM whatsapp_sessions WHERE id = ?').get(sessionId) as any;
+      const userId = sessionInfo?.user_id;
+
       await db.exec('BEGIN TRANSACTION');
-      const insertConv = await db.prepare('INSERT OR IGNORE INTO conversations (session_id, contact_number, contact_name, last_message_at) VALUES (?, ?, ?, ?)');
+      const insertConv = await db.prepare('INSERT OR IGNORE INTO conversations (user_id, session_id, contact_number, contact_name, last_message_at, labels) VALUES (?, ?, ?, ?, ?, ?)');
+      const updateConvLabels = await db.prepare('UPDATE conversations SET labels = ? WHERE session_id = ? AND contact_number = ?');
+      
       for (const chat of chats) {
         if (!isValidJid(chat.id)) continue;
-        await insertConv.run(sessionId, chat.id, chat.name || null, new Date().toISOString());
+        const labelJson = (chat as any).labels ? JSON.stringify((chat as any).labels) : null;
+        
+        await insertConv.run(userId || null, sessionId, chat.id, chat.name || null, new Date().toISOString(), labelJson);
+        if (labelJson) {
+          await updateConvLabels.run(labelJson, sessionId, chat.id);
+        }
       }
       await db.exec('COMMIT');
 
@@ -301,21 +333,29 @@ export async function connectToWhatsApp(sessionId: string, io: SocketIOServer, f
   });
 
   sock.ev.on('chats.upsert', async (chats) => {
-    const insertConv = await db.prepare('INSERT OR IGNORE INTO conversations (session_id, contact_number, contact_name, last_message_at) VALUES (?, ?, ?, ?)');
+    const insertConv = await db.prepare('INSERT OR IGNORE INTO conversations (user_id, session_id, contact_number, contact_name, last_message_at, labels) VALUES (?, ?, ?, ?, ?, ?)');
+    const updateConvLabels = await db.prepare('UPDATE conversations SET labels = ? WHERE session_id = ? AND contact_number = ?');
+    
+    // Get user_id for this session
+    const session = await db.prepare('SELECT user_id FROM whatsapp_sessions WHERE id = ?').get(sessionId) as any;
+    
     for (const chat of chats) {
-      // Skip status updates
       if (chat.id === 'status@broadcast') continue;
+      const labelJson = (chat as any).labels ? JSON.stringify((chat as any).labels) : null;
       
-      const number = chat.id.split('@')[0];
-      await insertConv.run(sessionId, chat.id, chat.name || null, new Date().toISOString());
+      await insertConv.run(session?.user_id || null, sessionId, chat.id, chat.name || null, new Date().toISOString(), labelJson);
+      if (labelJson) {
+        await updateConvLabels.run(labelJson, sessionId, chat.id);
+      }
     }
   });
 
   sock.ev.on('chats.update', async (updates) => {
-    const updateConv = await db.prepare('UPDATE conversations SET contact_name = COALESCE(?, contact_name) WHERE session_id = ? AND contact_number = ?');
+    const updateConv = await db.prepare('UPDATE conversations SET contact_name = COALESCE(?, contact_name), labels = COALESCE(?, labels) WHERE session_id = ? AND contact_number = ?');
     for (const update of updates) {
-      if (update.name) {
-        await updateConv.run(update.name, sessionId, update.id);
+      const labelJson = (update as any).labels ? JSON.stringify((update as any).labels) : null;
+      if (update.name || labelJson) {
+        await updateConv.run(update.name || null, labelJson, sessionId, update.id);
       }
     }
   });
@@ -572,6 +612,20 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
   // Get or create conversation
   let conversation = await db.prepare('SELECT * FROM conversations WHERE session_id = ? AND contact_number = ?').get(sessionId, from) as any;
   const isGroup = from.endsWith('@g.us') ? 1 : 0;
+
+  // RE-LINKING LOGIC: Check if this session's user has a conversation with this number in ANY session (maybe a deleted one)
+  const sessionInfo = await db.prepare('SELECT user_id FROM whatsapp_sessions WHERE id = ?').get(sessionId) as any;
+  const userId = sessionInfo?.user_id;
+
+  if (!conversation && userId) {
+    const globalConv = await db.prepare('SELECT * FROM conversations WHERE user_id = ? AND contact_number = ?').get(userId, from) as any;
+    if (globalConv) {
+      // Adopt this conversation into the current session
+      await db.prepare('UPDATE conversations SET session_id = ? WHERE id = ?').run(sessionId, globalConv.id);
+      conversation = { ...globalConv, session_id: sessionId };
+      console.log(`Re-linked orphaned conversation ${conversation.id} for ${from} to session ${sessionId}`);
+    }
+  }
   
   // FORCEFUL GLOBAL RETRIEVAL: Check if this number was saved or named in ANY other session or contact list
   const globalContact = await db.prepare(`
@@ -590,10 +644,11 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
   if (!conversation) {
     const result = await db.prepare(`
       INSERT INTO conversations (
-        session_id, contact_number, unread_count, contact_name, 
+        user_id, session_id, contact_number, unread_count, contact_name, 
         is_saved, is_ordered, is_rated, is_audited, is_autopilot, is_group
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      userId || null,
       sessionId, 
       from, 
       msg.key.fromMe ? 0 : 1,
@@ -607,6 +662,10 @@ async function saveMessage(sessionId: string, sock: WASocket, msg: proto.IWebMes
     );
     conversation = { id: result.lastInsertRowid };
   } else {
+    // Ensure user_id is synced if it was missing
+    if (!conversation.user_id && userId) {
+      await db.prepare('UPDATE conversations SET user_id = ? WHERE id = ?').run(userId, conversation.id);
+    }
     // Update existing conversation with global data if it's missing or outdated
     if (!conversation.contact_name && contactName) {
       await db.prepare('UPDATE conversations SET contact_name = ? WHERE id = ?').run(contactName, conversation.id);
@@ -1248,8 +1307,27 @@ async function processAIResponse(sessionId: string, sock: WASocket, conversation
       ? "STRICT RULE: NO GREETINGS. Do NOT say 'Hi', 'Hello', 'Assalam-o-Alaikum', 'Hey', or use the client's name at the start. Jump DIRECTLY to answering the client's message."
       : "You may start with a brief, natural greeting (e.g., 'Hi' or 'Hello') since this is your first interaction today. Keep it professional.";
 
+    // Resolve WhatsApp Labels to names
+    let labelContext = '';
+    if (conversation.labels) {
+      try {
+        const labelIds = JSON.parse(conversation.labels);
+        if (Array.isArray(labelIds) && labelIds.length > 0) {
+          const labels = await db.prepare(`SELECT name FROM whatsapp_labels WHERE session_id = ? AND label_id IN (${labelIds.map(() => '?').join(',')})`)
+            .all(sessionId, ...labelIds) as any[];
+          if (labels.length > 0) {
+            labelContext = `WhatsApp Labels for this client: ${labels.map(l => l.name).join(', ')}`;
+          }
+        }
+      } catch (e) {}
+    }
+
     const systemInstruction = `You are ${agent.name}, a professional team member at ${agent.brand_company || 'our company'}. 
 You are NOT an AI — you are a real human assisting clients on WhatsApp. Talk naturally, be helpful, and build trust.
+
+INFORMATION ABOUT CLIENT:
+- Name: ${clientName}
+${labelContext ? `- ${labelContext}` : ''}
 
 YOUR IDENTITY:
 - Name: ${agent.name}
